@@ -1,0 +1,161 @@
+<div class="wrap">
+  <svg
+    #svg
+    class="canvas"
+    [class.panning]="panning()"
+    [class.connecting]="tool() === 'connect'"
+    [class.adding]="tool() === 'add'"
+    (pointerdown)="onBackgroundDown($event)"
+    (pointermove)="onPointerMove($event)"
+    (pointerup)="onPointerUp($event)"
+    (pointercancel)="onPointerUp($event)"
+    (wheel)="onWheel($event)"
+  >
+    <defs>
+      <marker id="arrow-normal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+        <path d="M0 0L10 5L0 10z" fill="#8a93a3" />
+      </marker>
+      <marker id="arrow-slot1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+        <path d="M0 0L10 5L0 10z" fill="#e0884e" />
+      </marker>
+      <marker id="arrow-added" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+        <path d="M0 0L10 5L0 10z" fill="#5bc489" />
+      </marker>
+      <marker id="arrow-selected" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto">
+        <path d="M0 0L10 5L0 10z" fill="#ffffff" />
+      </marker>
+    </defs>
+
+    @for (e of edges(); track $index) {
+      <g class="edge">
+        <path class="edge-hit" [attr.d]="e.d" (pointerdown)="onEdgeDown($event, e.key)" />
+        <path
+          class="edge-line"
+          [class.slot1]="e.slot !== 0"
+          [class.added]="e.added"
+          [class.selected]="e.selected"
+          [attr.d]="e.d"
+          [attr.marker-end]="e.marker"
+        />
+      </g>
+    }
+
+    @if (rubberLine(); as rl) {
+      <line class="rubber" [attr.x1]="rl.x1" [attr.y1]="rl.y1" [attr.x2]="rl.x2" [attr.y2]="rl.y2" />
+    }
+
+    @for (n of nodes(); track n.id) {
+      <g class="node" [attr.transform]="n.transform" (pointerdown)="onNodeDown($event, n.id)">
+        <title>{{ n.tip }}</title>
+        @if (n.added) {
+          <rect class="added-ring" [attr.x]="-n.ringW" [attr.y]="-n.ringH" [attr.width]="n.ringW * 2" [attr.height]="n.ringH * 2" rx="12" />
+        } @else if (n.moved) {
+          <rect class="moved-ring" [attr.x]="-n.ringW" [attr.y]="-n.ringH" [attr.width]="n.ringW * 2" [attr.height]="n.ringH * 2" rx="12" />
+        }
+        <rect class="hit" [attr.x]="-n.halfW" [attr.y]="-n.halfH" [attr.width]="n.halfW * 2" [attr.height]="n.halfH * 2" />
+
+        @if (n.gate; as g) {
+          <g [attr.transform]="'scale(' + gateScale + ')'">
+            <path
+              class="shape"
+              [attr.d]="g.body"
+              [attr.fill]="n.color"
+              [class.selected]="n.selected"
+              [class.pending]="n.pending"
+              [class.target]="n.target"
+            />
+            @if (g.extra) {
+              <path class="stroke-only" [attr.d]="g.extra" />
+            }
+            @if (g.bubbleCx !== undefined) {
+              <circle
+                class="shape"
+                [attr.cx]="g.bubbleCx"
+                cy="0"
+                [attr.r]="bubbleRadius"
+                [attr.fill]="n.color"
+                [class.selected]="n.selected"
+                [class.pending]="n.pending"
+                [class.target]="n.target"
+              />
+            }
+          </g>
+        } @else {
+          <rect
+            class="shape"
+            [attr.x]="-boxW / 2"
+            [attr.y]="-boxH / 2"
+            [attr.width]="boxW"
+            [attr.height]="boxH"
+            rx="9"
+            [attr.fill]="n.color"
+            [class.selected]="n.selected"
+            [class.pending]="n.pending"
+            [class.target]="n.target"
+          />
+          @if (n.sub) {
+            <text class="node-title" x="0" y="-5" text-anchor="middle" dominant-baseline="central">{{ n.title }}</text>
+            <text class="node-sub" x="0" y="12" text-anchor="middle" dominant-baseline="central">{{ n.sub }}</text>
+          } @else {
+            <text class="node-title" x="0" y="0" text-anchor="middle" dominant-baseline="central">{{ n.title }}</text>
+          }
+        }
+
+        @for (p of n.inputs; track p.slot) {
+          <g class="port-group">
+            <title>{{ p.tip }}</title>
+            <circle
+              class="port"
+              [class.lower]="p.lower"
+              [class.hover]="p.hover"
+              [attr.cx]="p.x"
+              [attr.cy]="p.y"
+              [attr.r]="portRadius"
+            />
+            <circle class="port-hit" [attr.cx]="p.x" [attr.cy]="p.y" r="12" (pointerdown)="onInputDown($event, n.id, p.slot)" />
+          </g>
+        }
+        @if (n.out; as o) {
+          <g class="port-group">
+            <title>Output (drag to an input to link)</title>
+            <circle class="port out" [attr.cx]="o.x" [attr.cy]="o.y" [attr.r]="portRadius" />
+            <circle class="port-hit" [attr.cx]="o.x" [attr.cy]="o.y" r="12" (pointerdown)="onOutputDown($event, n.id)" />
+          </g>
+        }
+      </g>
+    }
+  </svg>
+
+  <div class="overlay zoom">
+    <button type="button" title="Zoom in" (click)="zoomBy(1.25)">+</button>
+    <button type="button" title="Zoom out" (click)="zoomBy(0.8)">&minus;</button>
+    <button type="button" title="Fit graph to view" (click)="fit()">Fit</button>
+  </div>
+
+  <div class="overlay legend">
+    <div class="legend-title">Nodes in this graph</div>
+    @for (l of legend(); track l.type) {
+      <div class="legend-row">
+        <app-node-icon [type]="l.type" [size]="22" />
+        <span>{{ l.name }}</span>
+        <span class="count">&times;{{ l.count }}</span>
+      </div>
+    }
+    <div class="legend-note">Inputs are on the left, the output on the right. Two-input nodes: upper slot = UPPER, lower slot = LOWER.</div>
+  </div>
+
+  @if (tool() === 'connect') {
+    <div class="overlay hint">
+      Connect: drag from a node to another, or click one node then the other. Esc cancels.
+    </div>
+  }
+  @if (tool() === 'add') {
+    <div class="overlay hint">
+      @if (placeType() === null) {
+        Pick a node type in the sidebar, then click here to place it.
+      } @else {
+        Click on the empty canvas to place a {{ placeName() }}.
+      }
+    </div>
+  }
+</div>

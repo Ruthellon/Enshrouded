@@ -1,0 +1,18 @@
+:host {
+  display: inline-flex;
+  flex: none;
+}
+svg {
+  display: block;
+}
+.shape {
+  stroke: #0b0e13;
+  stroke-width: 2.2;
+  stroke-linejoin: round;
+}
+.stroke-only {
+  fill: none;
+  stroke: #0b0e13;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+}

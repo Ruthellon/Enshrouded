@@ -1,0 +1,203 @@
+:host {
+  display: block;
+  position: absolute;
+  inset: 0;
+}
+.wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.06) 1px, transparent 0) 0 0 / 24px 24px,
+    #11151c;
+}
+.canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+}
+.canvas.panning {
+  cursor: grabbing;
+}
+.canvas.connecting {
+  cursor: crosshair;
+}
+.canvas.adding {
+  cursor: copy;
+}
+
+.edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+.edge-line {
+  fill: none;
+  stroke: #8a93a3;
+  stroke-width: 1.7;
+  pointer-events: none;
+}
+.edge-line.slot1 {
+  stroke: #e0884e;
+}
+.edge-line.added {
+  stroke: #5bc489;
+  stroke-dasharray: 6 4;
+}
+.edge-line.selected {
+  stroke: #ffffff;
+  stroke-width: 3;
+}
+.rubber {
+  stroke: #7cc4ff;
+  stroke-width: 2;
+  stroke-dasharray: 5 4;
+  pointer-events: none;
+}
+
+.node {
+  cursor: pointer;
+}
+.hit {
+  fill: transparent;
+}
+.shape {
+  stroke: #0b0e13;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+.stroke-only {
+  fill: none;
+  stroke: #0b0e13;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+.shape.selected {
+  stroke: #ffffff;
+  stroke-width: 3;
+}
+.shape.pending {
+  stroke: #7cc4ff;
+  stroke-width: 3;
+}
+.shape.target {
+  stroke: #5bc489;
+  stroke-width: 3.5;
+}
+.moved-ring {
+  fill: none;
+  stroke: #e8d44d;
+  stroke-width: 1.5;
+  stroke-dasharray: 3 3;
+  pointer-events: none;
+}
+.added-ring {
+  fill: none;
+  stroke: #5bc489;
+  stroke-width: 2;
+  stroke-dasharray: 4 3;
+  pointer-events: none;
+}
+.node-title {
+  font: 700 13px system-ui, sans-serif;
+  fill: #0b0e13;
+  pointer-events: none;
+}
+.node-sub {
+  font: 600 11px system-ui, sans-serif;
+  fill: #1c2230;
+  opacity: 0.85;
+  pointer-events: none;
+}
+.port {
+  fill: #0b0e13;
+  stroke: #d5dbe5;
+  stroke-width: 2;
+  pointer-events: none;
+}
+.port.lower {
+  stroke: #e0884e;
+}
+.port.out {
+  fill: #d5dbe5;
+  stroke: #0b0e13;
+}
+.port.hover {
+  fill: #173d2b;
+  stroke: #5bc489;
+  stroke-width: 3.5;
+}
+.port-hit {
+  fill: transparent;
+  cursor: crosshair;
+}
+
+.overlay {
+  position: absolute;
+  background: rgba(20, 25, 33, 0.9);
+  border: 1px solid #2b3340;
+  border-radius: 8px;
+  color: #c8d0dc;
+  font-size: 12px;
+}
+.zoom {
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+}
+.zoom button {
+  min-width: 30px;
+  height: 28px;
+  background: #222a36;
+  color: #e5e9f0;
+  border: 1px solid #364051;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.zoom button:hover {
+  background: #2c3646;
+}
+.legend {
+  left: 12px;
+  bottom: 12px;
+  padding: 8px 10px;
+  max-height: 45%;
+  max-width: 230px;
+  overflow: auto;
+}
+.legend-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: #9aa6b8;
+}
+.legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  line-height: 1.5;
+}
+.count {
+  color: #7d8899;
+}
+.legend-note {
+  margin-top: 4px;
+  color: #7d8899;
+  font-size: 11px;
+}
+.hint {
+  left: 50%;
+  top: 12px;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  color: #bfe2ff;
+}

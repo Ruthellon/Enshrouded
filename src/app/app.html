@@ -1,0 +1,328 @@
+<header class="topbar">
+  <h1>Enshrouded Sparkworks Editor</h1>
+  @if (parsed()) {
+    <span class="file-chip" title="Loaded file">{{ fileName() }} &middot; {{ fileInfo() }}</span>
+    <span class="spacer"></span>
+    <button type="button" (click)="undo()" [disabled]="!canUndo()" title="Undo (Ctrl+Z)">Undo</button>
+    <button type="button" (click)="redo()" [disabled]="!canRedo()" title="Redo (Ctrl+Y)">Redo</button>
+    <label class="btn" title="Open a different .ksd file">
+      Open another&hellip;
+      <input type="file" accept=".ksd" (change)="onFileInput($event)" hidden />
+    </label>
+    <input
+      class="name-input"
+      type="text"
+      [value]="exportName()"
+      (input)="onExportName($event)"
+      aria-label="File name for the exported file"
+    />
+    <button type="button" class="primary" (click)="exportFile()">Export .ksd</button>
+  }
+</header>
+
+<div class="banner" role="note">
+  <strong>Experimental.</strong> The .ksd format was reverse-engineered from save files, not documented by the game.
+  Always keep a backup of your original world file before replacing it.
+</div>
+
+@if (warning()) {
+  <div class="warn-bar" role="alert">{{ warning() }}</div>
+}
+
+@if (error()) {
+  <div class="error" role="alert">{{ error() }}</div>
+}
+
+@if (!parsed()) {
+  <main class="landing">
+    <label
+      class="dropzone"
+      [class.over]="dragOver()"
+      (dragover)="onDragOver($event)"
+      (dragleave)="onDragLeave()"
+      (drop)="onDrop($event)"
+    >
+      <input type="file" accept=".ksd" (change)="onFileInput($event)" hidden />
+      <div class="dz-title">Drop your <code>world0.ksd</code> here</div>
+      <div class="dz-sub">or click to choose a file. Nothing is uploaded; the file is read in your browser.</div>
+    </label>
+  </main>
+} @else {
+  <main class="workspace">
+    <aside class="sidebar">
+      <section>
+        <h2>Graphs</h2>
+        <ul class="graph-list">
+          @for (g of graphItems(); track g.index) {
+            <li>
+              <button
+                type="button"
+                class="graph-btn"
+                [class.active]="g.index === graphIndex()"
+                [disabled]="g.nodes === 0"
+                (click)="selectGraph(g.index)"
+              >
+                <span class="gname">{{ g.name || 'Graph ' + g.index }}</span>
+                <span class="gmeta">Graph {{ g.index }} &middot; {{ g.nodes }} nodes &middot; {{ g.edges }} links</span>
+                @if (g.changes > 0) {
+                  <span class="badge" title="Edited">{{ g.changes }}</span>
+                }
+              </button>
+            </li>
+          }
+        </ul>
+      </section>
+
+      <section>
+        <h2>Tool</h2>
+        <div class="seg">
+          <button type="button" [class.active]="tool() === 'move'" (click)="setTool('move')">Move</button>
+          <button type="button" [class.active]="tool() === 'connect'" (click)="setTool('connect')">Connect</button>
+          <button type="button" [class.active]="tool() === 'add'" (click)="setTool('add')">Add</button>
+        </div>
+        <p class="help">
+          @if (tool() === 'move') {
+            Drag nodes to move them. Drag from the round slot on a node's right edge to an input slot on another node's
+            left edge to link them. Drag the background to pan, scroll to zoom.
+          } @else if (tool() === 'connect') {
+            Drag from a node to another to link them (source &rarr; target).
+          } @else {
+            Choose a node type below, then click the canvas to place it.
+          }
+        </p>
+        <label class="check">
+          <input type="checkbox" [checked]="enforceRules()" (change)="onEnforce($event)" />
+          <span>Enforce Sparkworks connection rules</span>
+        </label>
+      </section>
+
+      <section>
+        <h2>Add node</h2>
+        <p class="help count" [class.warn]="atLimit()">{{ nodeCount() }} / {{ maxNodes }} nodes in this graph</p>
+        <div class="palette">
+          @for (t of palette; track t.type) {
+            <button
+              type="button"
+              class="pal"
+              [class.active]="tool() === 'add' && placeType() === t.type"
+              [disabled]="atLimit()"
+              [title]="t.description"
+              (click)="chooseNodeType(t.type)"
+            >
+              <app-node-icon [type]="t.type" [size]="26" />
+              <span>{{ t.name }}</span>
+            </button>
+          }
+        </div>
+        @if (atLimit()) {
+          <p class="help warn">This graph is full. Enshrouded allows at most {{ maxNodes }} nodes per graph.</p>
+        }
+        <p class="help small">
+          A new World Object has no object assigned; link it to an object inside the game.
+        </p>
+      </section>
+
+      <section>
+        <h2>View</h2>
+        <label class="field">
+          <span>Node size: {{ nodeScalePct() }}%</span>
+          <input type="range" min="0.4" max="1.8" step="0.1" [value]="nodeScale()" (input)="onNodeScale($event)" />
+          <span class="small-note">Large graphs: lower this or zoom in to untangle crowded nodes.</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" [checked]="flipY()" (change)="onFlip($event)" />
+          <span>Flip vertical axis (view only)</span>
+        </label>
+        <button type="button" class="wide" (click)="fit()">Fit to view</button>
+      </section>
+
+      <section>
+        <h2>Rule check</h2>
+        @if (problems().length === 0) {
+          <p class="help ok">No rule problems in this graph.</p>
+        } @else {
+          <p class="help">{{ problems().length }} problem(s) in this graph:</p>
+          <ul class="problems">
+            @for (p of problems(); track $index) {
+              <li>
+                <button type="button" class="link" (click)="selectProblem(p)">{{ p.message }}</button>
+              </li>
+            }
+          </ul>
+        }
+      </section>
+
+      <section>
+        <h2>Changes</h2>
+        @if (summary(); as s) {
+          @if (s.total === 0) {
+            <p class="help">No edits yet.</p>
+          } @else {
+            <ul class="changes">
+              <li>{{ s.addedNodes }} node(s) added</li>
+              <li>{{ s.removedNodes }} node(s) removed</li>
+              <li>{{ s.movedNodes }} node(s) moved</li>
+              <li>{{ s.editedNodes }} node setting(s) changed</li>
+              <li>{{ s.addedEdges }} link(s) added</li>
+              <li>{{ s.removedEdges }} link(s) removed</li>
+            </ul>
+          }
+        }
+        <button type="button" class="wide" (click)="revertGraph()">Revert this graph</button>
+        @if (notice()) {
+          <p class="notice">{{ notice() }}</p>
+        }
+      </section>
+    </aside>
+
+    <section class="stage">
+      <div class="stage-title">
+        <strong>{{ graphTitle() }}</strong>
+        <span class="muted">Graph {{ graphIndex() }}</span>
+      </div>
+      <div class="stage-canvas">
+        @if (graph(); as g) {
+          <app-graph-canvas
+            [graph]="g"
+            [original]="originalGraph()"
+            [tool]="tool()"
+            [selection]="selection()"
+            [flipY]="flipY()"
+            [nodeScale]="nodeScale()"
+            [placeType]="placeType()"
+            [fitTrigger]="fitTrigger()"
+            (selectionChange)="onSelect($event)"
+            (nodeMove)="onNodeMove($event)"
+            (nodeMoveEnd)="onNodeMoveEnd()"
+            (connect)="onConnect($event)"
+            (place)="onPlace($event)"
+          />
+        }
+      </div>
+    </section>
+
+    <aside class="details">
+      <h2>Selection</h2>
+
+      @if (nodeInfo(); as ni) {
+        @if (selectedNode(); as n) {
+          <div class="card">
+            <div class="row">
+              <span class="swatch" [style.background]="ni.color"></span>
+              <strong>{{ ni.name }}</strong>
+              <span class="muted">{{ ni.category }}</span>
+            </div>
+            <p class="desc">{{ ni.description }}</p>
+            <p class="desc">{{ ni.inputsText }} {{ ni.outputsText }}</p>
+            <div class="kv"><span>id</span><code>{{ n.id }}</code></div>
+            @if (ni.isObject) {
+              <div class="kv">
+                <span>object</span>
+                @if (ni.objectRef) {
+                  <code>ref {{ ni.objectRef }}</code>
+                } @else {
+                  <span class="val">none assigned yet</span>
+                }
+              </div>
+            }
+
+            @if (ni.hasChannel) {
+              <label class="field">
+                <span>Channel (1&ndash;32)</span>
+                <select (change)="onChannel($event)">
+                  @for (c of channels; track c) {
+                    <option [value]="c" [selected]="c === ni.channel">{{ c }}</option>
+                  }
+                </select>
+              </label>
+            }
+
+            @for (d of ni.durations; track d.field) {
+              <label class="field">
+                <span>{{ d.label }} (min:sec:ms, 0:0:000 to 10:0:000)</span>
+                <input type="text" [value]="d.text" (change)="onDuration(d.field, $event)" />
+              </label>
+            }
+
+            <div class="pos">
+              <label>x <input type="number" step="1" [value]="n.x" (change)="onPosInput('x', $event)" /></label>
+              <label>y <input type="number" step="1" [value]="n.y" (change)="onPosInput('y', $event)" /></label>
+            </div>
+            <div class="btn-row">
+              <button
+                type="button"
+                [disabled]="atLimit()"
+                title="Copy this node (links are not copied)"
+                (click)="duplicateSelectedNode()"
+              >
+                Duplicate
+              </button>
+              <button type="button" class="danger" (click)="deleteSelectedNode()">Delete node</button>
+            </div>
+          </div>
+
+          @if (nodeConnections(); as c) {
+            <h3>Outgoing ({{ c.outgoing.length }})</h3>
+            <ul class="conn">
+              @for (r of c.outgoing; track r.key) {
+                <li>
+                  <button type="button" class="link" (click)="selectEdge(r.key)">
+                    &rarr; {{ r.otherName }} <small>{{ r.otherId }} &middot; {{ r.slotText }}</small>
+                  </button>
+                  <button type="button" class="x" title="Delete link" (click)="deleteEdge(r.key)">&times;</button>
+                </li>
+              } @empty {
+                <li class="none">none</li>
+              }
+            </ul>
+            <h3>Incoming ({{ c.incoming.length }})</h3>
+            <ul class="conn">
+              @for (r of c.incoming; track r.key) {
+                <li>
+                  <button type="button" class="link" (click)="selectEdge(r.key)">
+                    &larr; {{ r.otherName }} <small>{{ r.otherId }} &middot; {{ r.slotText }}</small>
+                  </button>
+                  <button type="button" class="x" title="Delete link" (click)="deleteEdge(r.key)">&times;</button>
+                </li>
+              } @empty {
+                <li class="none">none</li>
+              }
+            </ul>
+          }
+        }
+      } @else {
+        @if (selectedEdge(); as e) {
+          <div class="card">
+            <strong>Link</strong>
+            <div class="kv"><span>from</span><span class="val">{{ e.fromName }} <code>{{ e.from }}</code></span></div>
+            <div class="kv"><span>to</span><span class="val">{{ e.toName }} <code>{{ e.to }}</code></span></div>
+            <div class="kv"><span>into</span><span class="val">{{ e.slotText }} connection</span></div>
+            @if (e.twoInputs) {
+              <div class="seg">
+                <button type="button" [class.active]="e.slot === 0" (click)="setSelectedEdgeSlot(0)">UPPER</button>
+                <button type="button" [class.active]="e.slot === 1" (click)="setSelectedEdgeSlot(1)">LOWER</button>
+              </div>
+            }
+            <div class="btn-row">
+              <button type="button" (click)="reverseSelectedEdge()">Reverse direction</button>
+              <button type="button" class="danger" (click)="deleteSelectedEdge()">Delete</button>
+            </div>
+          </div>
+        } @else {
+          <p class="help">Click a node or a link to inspect and edit it.</p>
+        }
+      }
+
+      <h3>About this data</h3>
+      <p class="help small">
+        Node names, colours and connection rules come from the game. Each node shows its slots: inputs on the left, the
+        output on the right. Two-input nodes have an upper and a lower input slot, and orange links go into the LOWER
+        one (the file stores UPPER as input slot 0 and LOWER as slot 1). Dropping a link on a node body, not a slot,
+        uses the first free input. Save and Use Signal channels
+        and the time values are decoded from each node&rsquo;s extra data. World Object names are not stored in a way
+        this editor can read. Logic gates are drawn as their usual symbols. Green dashed links and rings are new,
+        and yellow dashed rings mark nodes you moved or changed.
+      </p>
+    </aside>
+  </main>
+}

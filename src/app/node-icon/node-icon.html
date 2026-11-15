@@ -1,0 +1,13 @@
+<svg viewBox="-30 -30 60 60" [attr.width]="size()" [attr.height]="size()" aria-hidden="true">
+  @if (gate(); as g) {
+    <path class="shape" [attr.d]="g.body" [attr.fill]="color()" />
+    @if (g.extra) {
+      <path class="stroke-only" [attr.d]="g.extra" />
+    }
+    @if (g.bubbleCx !== undefined) {
+      <circle class="shape" [attr.cx]="g.bubbleCx" cy="0" [attr.r]="bubbleRadius" [attr.fill]="color()" />
+    }
+  } @else {
+    <rect class="shape" x="-27" y="-16" width="54" height="32" rx="6" [attr.fill]="color()" />
+  }
+</svg>
