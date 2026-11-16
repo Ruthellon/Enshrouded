@@ -130,6 +130,9 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
     const hoverNode = this.hoverTarget();
     const hoverPort = this.hoverPort();
     const s = this.nodeScale();
+    // Channel of the selected Save/Use Signal, so every node on the same channel can be highlighted.
+    const selNode = sel !== null && sel.kind === 'node' ? this.graph().nodes.find((m) => m.id === sel.id) : undefined;
+    const selChannel = selNode ? channelOf(selNode) : null;
     return this.graph().nodes.map((n) => {
       const p = toScreen(v, n.x, n.y);
       const o = orig.get(n.id);
@@ -180,6 +183,7 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
           !!o &&
           (Math.fround(o.x) !== Math.fround(n.x) || Math.fround(o.y) !== Math.fround(n.y) || o.extra !== n.extra),
         selected: sel !== null && sel.kind === 'node' && sel.id === n.id,
+        channelMate: selChannel !== null && channel === selChannel && n.id !== selNode?.id,
         pending: pending === n.id,
         target: hoverNode === n.id,
         tip: `${info.name}${details ? ' (' + details + ')' : ''}  |  id ${n.id}`,

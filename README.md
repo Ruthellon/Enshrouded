@@ -18,19 +18,6 @@ npm start          # serves http://localhost:4200
 npm run build      # production build in dist/
 ```
 
-### Host it on a website
-
-The build uses relative paths, so it works from any folder on a web server (for example
-`https://www.mysite.com/enshrouded/`). It needs no server-side code and no rewrite rules.
-
-1. Run `npm run build`.
-2. Copy everything inside `dist/sparkworks-editor/browser/` into the folder on your server, such as
-   `public_html/enshrouded/`.
-3. Link to the folder with a trailing slash: `/enshrouded/`. Apache and nginx normally redirect `/enshrouded` there for you.
-
-Do not add a `<base href>` to `src/index.html`. The graph's arrowheads use `url(#…)` references, and a base
-href can break them when the page is opened through a URL such as `/enshrouded/index.html`.
-
 ## Use it
 
 1. Drop `world0.ksd` on the page (or click to choose it).

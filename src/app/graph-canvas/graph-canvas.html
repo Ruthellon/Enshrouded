@@ -52,6 +52,9 @@
         } @else if (n.moved) {
           <rect class="moved-ring" [attr.x]="-n.ringW" [attr.y]="-n.ringH" [attr.width]="n.ringW * 2" [attr.height]="n.ringH * 2" rx="12" />
         }
+        @if (n.channelMate) {
+          <rect class="channel-ring" [attr.x]="-n.ringW - 5" [attr.y]="-n.ringH - 5" [attr.width]="n.ringW * 2 + 10" [attr.height]="n.ringH * 2 + 10" rx="15" />
+        }
         <rect class="hit" [attr.x]="-n.halfW" [attr.y]="-n.halfH" [attr.width]="n.halfW * 2" [attr.height]="n.halfH * 2" />
 
         @if (n.gate; as g) {

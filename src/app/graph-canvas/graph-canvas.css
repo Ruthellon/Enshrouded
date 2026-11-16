@@ -105,6 +105,12 @@
   stroke-dasharray: 4 3;
   pointer-events: none;
 }
+.channel-ring {
+  fill: rgba(78, 220, 230, 0.12);
+  stroke: #4edce6;
+  stroke-width: 2.5;
+  pointer-events: none;
+}
 .node-title {
   font: 700 13px system-ui, sans-serif;
   fill: #0b0e13;
