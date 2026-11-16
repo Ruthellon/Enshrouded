@@ -231,6 +231,8 @@ types `SparkNode {id,x,y,type,hasExtra,extra}`, `SparkEdge {from,to,flag}`,
 
 `graph-model.ts`: `moveNode`, `addEdge`, `removeEdge`, `reverseEdge`, `setEdgeSlot`, `setChannel`,
 `setDuration`, `insertNode`, `duplicateNode`, `deleteNode` (→ `{data, removedEdges, orphanedUses}`),
+`moveNodes` (group move, one graph update), `deleteNodes` (sequential `deleteNode` in selection order),
+`selectedNodeIds`, `selectNodes` (normalises to null / `{kind:'node'}` / `{kind:'nodes',ids}`), `toggleNodeSelection`,
 `newNodeId`, `autoSlot`, `structuralIssue`, `ruleIssue`, `connectionIssue`, `validateGraph`,
 `summarizeChanges`, `edgeKey` (`from>to#flag`), `slotOf` (`flag>>8`), `withSlot`, `class History<T>`.
 
@@ -244,7 +246,8 @@ types `SparkNode {id,x,y,type,hasExtra,extra}`, `SparkEdge {from,to,flag}`,
 checksum algorithm; XXH3 implementation; move/add/delete payloads and checksums; new-node defaults for every
 type; in-game load of exports after **move** and **add**; UPPER = slot 0, LOWER = slot 1; Graph 0 name.
 
-**NOT yet tested in the game:** export after **delete**, **link edits**, **channel edits**, **time edits**.
+**NOT yet tested in the game:** export after **delete**, **multi-node delete** (node order after several
+swap-removes is a guess at what the game does), **link edits**, **channel edits**, **time edits**.
 
 **Risks / UNKNOWN:**
 - The ~1 KB **trailer** (runtime state) is not understood. If it refers to nodes by position/id, editing a graph

@@ -334,6 +334,20 @@ button.wide {
   border-radius: 50%;
   display: inline-block;
 }
+.multi-types {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 13px;
+}
+.multi-types li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .kv {
   display: flex;
   gap: 8px;

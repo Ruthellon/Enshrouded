@@ -23,8 +23,32 @@ import {
 
 export type Selection =
   | { kind: 'node'; id: string }
+  /** Two or more nodes (use `selectNodes` to build one, so a single id becomes a 'node' selection). */
+  | { kind: 'nodes'; ids: readonly string[] }
   | { kind: 'edge'; key: string }
   | null;
+
+/** Ids of the selected nodes (empty for an edge or nothing). */
+export function selectedNodeIds(sel: Selection): readonly string[] {
+  if (sel === null) return [];
+  if (sel.kind === 'node') return [sel.id];
+  if (sel.kind === 'nodes') return sel.ids;
+  return [];
+}
+
+/** The selection for a list of node ids: nothing, one node, or several (duplicates dropped). */
+export function selectNodes(ids: readonly string[]): Selection {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) return null;
+  if (unique.length === 1) return { kind: 'node', id: unique[0] };
+  return { kind: 'nodes', ids: unique };
+}
+
+/** Add a node to the node selection, or take it out if it is already in it. */
+export function toggleNodeSelection(sel: Selection, id: string): Selection {
+  const ids = selectedNodeIds(sel);
+  return selectNodes(ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]);
+}
 
 export type Result<T> = { ok: true; data: T } | { ok: false; reason: string };
 const ok = <T>(data: T): Result<T> => ({ ok: true, data });
@@ -57,6 +81,20 @@ export function moveNode(data: LogicData, gi: number, nodeId: string, x: number,
   const n = data.graphs[gi].nodes.find((q) => q.id === nodeId);
   if (!n || (n.x === x && n.y === y)) return data;
   return replaceNode(data, gi, nodeId, (q) => ({ ...q, x, y })) ?? data;
+}
+
+/** Move several nodes at once (one new graph, so a group drag is a single change). */
+export function moveNodes(data: LogicData, gi: number, moves: readonly { id: string; x: number; y: number }[]): LogicData {
+  const g = data.graphs[gi];
+  const at = new Map(moves.map((m) => [m.id, m]));
+  let changed = false;
+  const nodes = g.nodes.map((n) => {
+    const m = at.get(n.id);
+    if (!m || (n.x === m.x && n.y === m.y)) return n;
+    changed = true;
+    return { ...n, x: m.x, y: m.y };
+  });
+  return changed ? replaceGraph(data, gi, { ...g, nodes }) : data;
 }
 
 // ------------------------------------------------------------------ connection rules
@@ -350,6 +388,40 @@ export function deleteNode(data: LogicData, gi: number, nodeId: string): Deleted
     if (!stillSaved) orphanedUses = nodes.filter((n) => n.type === 12 && channelOf(n) === c).length;
   }
   return { data: replaceGraph(data, gi, { ...g, nodes, edges }), removedEdges: g.edges.length - edges.length, orphanedUses };
+}
+
+export interface DeletedMany extends Deleted {
+  removedNodes: number;
+}
+
+/**
+ * Remove several nodes, one after another in the given order, each the way `deleteNode` does
+ * (swap-remove). Ids not in the graph are skipped. Returns null when nothing was removed.
+ */
+export function deleteNodes(data: LogicData, gi: number, nodeIds: readonly string[]): DeletedMany | null {
+  const before = data.graphs[gi];
+  const deletedSaves = new Set<number>();
+  let cur = data;
+  let removedNodes = 0;
+  for (const id of nodeIds) {
+    const node = cur.graphs[gi].nodes.find((n) => n.id === id);
+    const r = deleteNode(cur, gi, id);
+    if (!node || !r) continue;
+    if (node.type === 11) {
+      const c = channelOf(node);
+      if (c !== null) deletedSaves.add(c);
+    }
+    cur = r.data;
+    removedNodes++;
+  }
+  if (removedNodes === 0) return null;
+  const after = cur.graphs[gi];
+  let orphanedUses = 0;
+  for (const c of deletedSaves) {
+    if (after.nodes.some((n) => n.type === 11 && channelOf(n) === c)) continue;
+    orphanedUses += after.nodes.filter((n) => n.type === 12 && channelOf(n) === c).length;
+  }
+  return { data: cur, removedNodes, removedEdges: before.edges.length - after.edges.length, orphanedUses };
 }
 
 // ------------------------------------------------------------------ change summary

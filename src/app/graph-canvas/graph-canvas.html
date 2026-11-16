@@ -43,6 +43,9 @@
     @if (rubberLine(); as rl) {
       <line class="rubber" [attr.x1]="rl.x1" [attr.y1]="rl.y1" [attr.x2]="rl.x2" [attr.y2]="rl.y2" />
     }
+    @if (box(); as b) {
+      <rect class="select-box" [attr.x]="b.x" [attr.y]="b.y" [attr.width]="b.w" [attr.height]="b.h" />
+    }
 
     @for (n of nodes(); track n.id) {
       <g class="node" [attr.transform]="n.transform" (pointerdown)="onNodeDown($event, n.id)">

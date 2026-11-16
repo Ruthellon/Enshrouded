@@ -19,10 +19,14 @@ import {
   addEdge,
   autoSlot,
   deleteNode,
+  deleteNodes,
   duplicateNode,
   edgeKey,
   insertNode,
   moveNode,
+  moveNodes,
+  selectNodes,
+  selectedNodeIds,
   removeEdge,
   reverseEdge,
   setChannel,
@@ -177,6 +181,24 @@ export class App {
       durations: readDurations(n),
       isObject: n.type === 0,
       objectRef: n.type === 0 ? n.extra : '',
+    };
+  });
+  /** Summary of a multi-node selection (null unless two or more nodes are selected). */
+  protected readonly multiInfo = computed(() => {
+    const s = this.selection();
+    const g = this.graph();
+    if (!s || s.kind !== 'nodes' || !g) return null;
+    const want = new Set(s.ids);
+    const picked = g.nodes.filter((n) => want.has(n.id));
+    const counts = new Map<number, number>();
+    for (const n of picked) counts.set(n.type, (counts.get(n.type) ?? 0) + 1);
+    const links = g.edges.filter((e) => want.has(e.from) || want.has(e.to)).length;
+    return {
+      count: picked.length,
+      links,
+      types: [...counts.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([type, count]) => ({ type, count, name: typeInfo(type).name, color: typeColor(type) })),
     };
   });
   protected readonly selectedEdge = computed(() => {
@@ -337,9 +359,9 @@ export class App {
   }
 
   /** Live update while a node is being dragged (not yet an undo step). */
-  protected onNodeMove(m: { id: string; x: number; y: number }): void {
+  protected onNodeMove(moves: { id: string; x: number; y: number }[]): void {
     const l = this.logic();
-    if (l) this.logic.set(moveNode(l, this.graphIndex(), m.id, m.x, m.y));
+    if (l) this.logic.set(moveNodes(l, this.graphIndex(), moves));
   }
   protected onNodeMoveEnd(): void {
     this.commit();
@@ -396,6 +418,28 @@ export class App {
     msg += '.';
     if (r.orphanedUses > 0) msg += ` ${r.orphanedUses} Use Signal(s) on that channel no longer have a Save Signal.`;
     this.notice.set(msg);
+  }
+
+  /** Delete every node in a multi-selection (and every link touching them) as one undo step. */
+  protected deleteSelectedNodes(): void {
+    const s = this.selection();
+    const l = this.logic();
+    if (!s || s.kind !== 'nodes' || !l) return;
+    const r = deleteNodes(l, this.graphIndex(), s.ids);
+    if (!r) return;
+    this.logic.set(r.data);
+    this.commit();
+    this.selection.set(null);
+    let msg = `Deleted ${r.removedNodes} node(s)`;
+    if (r.removedEdges > 0) msg += ` and ${r.removedEdges} link(s)`;
+    msg += '.';
+    if (r.orphanedUses > 0) msg += ` ${r.orphanedUses} Use Signal(s) no longer have a Save Signal on their channel.`;
+    this.notice.set(msg);
+  }
+
+  protected selectAllNodes(): void {
+    const g = this.graph();
+    if (g) this.onSelect(selectNodes(g.nodes.map((n) => n.id)));
   }
 
   protected onPosInput(axis: 'x' | 'y', ev: Event): void {
@@ -525,8 +569,15 @@ export class App {
     const s = this.selection();
     const g = this.graph();
     if (s && g) {
-      const gone = s.kind === 'edge' ? !g.edges.some((e) => edgeKey(e) === s.key) : !g.nodes.some((n) => n.id === s.id);
-      if (gone) this.selection.set(null);
+      if (s.kind === 'edge') {
+        if (!g.edges.some((e) => edgeKey(e) === s.key)) this.selection.set(null);
+      } else {
+        // keep whichever selected nodes still exist
+        const present = new Set(g.nodes.map((n) => n.id));
+        const ids = selectedNodeIds(s);
+        const kept = ids.filter((id) => present.has(id));
+        if (kept.length !== ids.length) this.selection.set(selectNodes(kept));
+      }
     }
   }
 
@@ -544,10 +595,17 @@ export class App {
       if (typing) return;
       ev.preventDefault();
       this.redo();
+    } else if (mod && key === 'a') {
+      if (typing || !this.graph()) return;
+      ev.preventDefault();
+      this.selectAllNodes();
     } else if ((ev.key === 'Delete' || ev.key === 'Backspace') && !typing) {
       if (this.selectedEdge()) {
         ev.preventDefault();
         this.deleteSelectedEdge();
+      } else if (this.multiInfo()) {
+        ev.preventDefault();
+        this.deleteSelectedNodes();
       } else if (this.selectedNode()) {
         ev.preventDefault();
         this.deleteSelectedNode();

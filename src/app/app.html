@@ -309,7 +309,29 @@
             </div>
           </div>
         } @else {
-          <p class="help">Click a node or a link to inspect and edit it.</p>
+          @if (multiInfo(); as m) {
+            <div class="card">
+              <strong>{{ m.count }} nodes selected</strong>
+              <ul class="multi-types">
+                @for (t of m.types; track t.type) {
+                  <li><span class="swatch" [style.background]="t.color"></span> {{ t.count }} &times; {{ t.name }}</li>
+                }
+              </ul>
+              <p class="desc">Drag any selected node to move them all. Shift/Ctrl-click a node to add or remove it.</p>
+              <div class="btn-row">
+                <button type="button" (click)="onSelect(null)">Clear selection</button>
+                <button type="button" class="danger" (click)="deleteSelectedNodes()">Delete {{ m.count }} nodes</button>
+              </div>
+              @if (m.links > 0) {
+                <p class="help small">Deleting also removes the {{ m.links }} link(s) touching these nodes.</p>
+              }
+            </div>
+          } @else {
+            <p class="help">Click a node or a link to inspect and edit it.</p>
+            <p class="help small">
+              Shift/Ctrl-click nodes or Shift-drag on empty space to select several. Ctrl+A selects all.
+            </p>
+          }
         }
       }
 

@@ -15,7 +15,7 @@ import {
   viewChild,
 } from '@angular/core';
 import type { SparkGraph } from '../ksd/ksd-core';
-import { edgeKey, slotOf, type Selection } from '../ksd/graph-model';
+import { edgeKey, selectNodes, selectedNodeIds, slotOf, toggleNodeSelection, type Selection } from '../ksd/graph-model';
 import {
   type HitBox,
   type Pt,
@@ -49,8 +49,14 @@ const round1 = (n: number): number => Math.round(n * 10) / 10;
 
 type DragState =
   | { kind: 'pan'; sx: number; sy: number; tx: number; ty: number; moved: boolean }
-  | { kind: 'node'; id: string; dx: number; dy: number; sx: number; sy: number; moved: boolean }
+  /** Dragging one or more nodes; `offsets` is each node's position relative to the pointer (world units). */
+  | { kind: 'node'; offsets: { id: string; dx: number; dy: number }[]; sx: number; sy: number; moved: boolean }
+  /** Shift-drag on the background draws a selection box; `base` is what was selected before. */
+  | { kind: 'box'; sx: number; sy: number; base: readonly string[]; moved: boolean }
   | { kind: 'connect'; fromId: string };
+
+/** True when the pointer event should add to / remove from the selection instead of replacing it. */
+const additive = (ev: PointerEvent): boolean => ev.shiftKey || ev.ctrlKey || ev.metaKey;
 
 /**
  * SVG view of one Sparkworks graph. It owns pan/zoom and pointer handling, and reports edits
@@ -79,7 +85,8 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
   readonly fitTrigger = input(0);
 
   readonly selectionChange = output<Selection>();
-  readonly nodeMove = output<{ id: string; x: number; y: number }>();
+  /** Live positions while one or more nodes are dragged. */
+  readonly nodeMove = output<{ id: string; x: number; y: number }[]>();
   readonly nodeMoveEnd = output<void>();
   readonly connect = output<ConnectRequest>();
   /** The Add tool was clicked on empty background at these world coordinates. */
@@ -100,6 +107,9 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
   protected readonly hoverTarget = signal<string | null>(null);
   /** The input slot a link being dragged would land on. */
   protected readonly hoverPort = signal<{ id: string; slot: number } | null>(null);
+  /** Selection box being drawn (screen coordinates). */
+  protected readonly box = signal<{ x: number; y: number; w: number; h: number } | null>(null);
+  private readonly selectedIds = computed(() => new Set(selectedNodeIds(this.selection())));
   private readonly sizeKnown = computed(() => this.width() > 0 && this.height() > 0);
 
   protected readonly portRadius = PORT_R;
@@ -126,11 +136,13 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
     const orig = this.originalPos();
     const hasOriginal = this.original() !== null;
     const sel = this.selection();
+    const selIds = this.selectedIds();
     const pending = this.pendingFrom();
     const hoverNode = this.hoverTarget();
     const hoverPort = this.hoverPort();
     const s = this.nodeScale();
-    // Channel of the selected Save/Use Signal, so every node on the same channel can be highlighted.
+    // Channel of the selected Save/Use Signal (single selection only), so every node on the same
+    // channel can be highlighted.
     const selNode = sel !== null && sel.kind === 'node' ? this.graph().nodes.find((m) => m.id === sel.id) : undefined;
     const selChannel = selNode ? channelOf(selNode) : null;
     return this.graph().nodes.map((n) => {
@@ -182,7 +194,7 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
         moved:
           !!o &&
           (Math.fround(o.x) !== Math.fround(n.x) || Math.fround(o.y) !== Math.fround(n.y) || o.extra !== n.extra),
-        selected: sel !== null && sel.kind === 'node' && sel.id === n.id,
+        selected: selIds.has(n.id),
         channelMate: selChannel !== null && channel === selChannel && n.id !== selNode?.id,
         pending: pending === n.id,
         target: hoverNode === n.id,
@@ -325,10 +337,27 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
   protected onBackgroundDown(ev: PointerEvent): void {
     if (ev.button !== 0) return;
     const p = this.local(ev);
-    const v = this.vp();
-    this.drag = { kind: 'pan', sx: p.x, sy: p.y, tx: v.tx, ty: v.ty, moved: false };
-    this.panning.set(true);
+    if (ev.shiftKey && this.tool() !== 'connect') {
+      // Shift-drag: draw a box; nodes inside it are added to the current node selection.
+      this.drag = { kind: 'box', sx: p.x, sy: p.y, base: selectedNodeIds(this.selection()), moved: false };
+    } else {
+      const v = this.vp();
+      this.drag = { kind: 'pan', sx: p.x, sy: p.y, tx: v.tx, ty: v.ty, moved: false };
+      this.panning.set(true);
+    }
     this.svgRef().nativeElement.setPointerCapture(ev.pointerId);
+  }
+
+  /** Ids of the nodes that overlap a screen-space rectangle. */
+  private nodesInBox(b: { x: number; y: number; w: number; h: number }): string[] {
+    const s = this.nodeScale();
+    return this.nodes()
+      .filter((n) => {
+        const hw = n.halfW * s;
+        const hh = n.halfH * s;
+        return n.x + hw >= b.x && n.x - hw <= b.x + b.w && n.y + hh >= b.y && n.y - hh <= b.y + b.h;
+      })
+      .map((n) => n.id);
   }
 
   /** Begin dragging a link out of a node (from its output slot, or from its body in Connect mode). */
@@ -345,7 +374,17 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
     ev.stopPropagation();
     const svg = this.svgRef().nativeElement;
     const p = this.local(ev);
-    this.selectionChange.emit({ kind: 'node', id });
+
+    if (this.tool() !== 'connect' && additive(ev)) {
+      // Shift/Ctrl-click adds the node to the selection, or takes it out.
+      this.selectionChange.emit(toggleNodeSelection(this.selection(), id));
+      return;
+    }
+
+    // Pressing a node that is already part of a multi-selection drags the whole group.
+    const group = this.selectedIds();
+    const ids = group.size > 1 && group.has(id) && this.tool() !== 'connect' ? [...group] : [id];
+    if (ids.length === 1) this.selectionChange.emit({ kind: 'node', id });
 
     if (this.tool() === 'connect') {
       const pending = this.pendingFrom();
@@ -359,10 +398,13 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
       return;
     }
 
-    const node = this.graph().nodes.find((n) => n.id === id);
-    if (!node) return;
     const w = toWorld(this.vp(), p.x, p.y);
-    this.drag = { kind: 'node', id, dx: node.x - w.x, dy: node.y - w.y, sx: p.x, sy: p.y, moved: false };
+    const want = new Set(ids);
+    const offsets = this.graph()
+      .nodes.filter((n) => want.has(n.id))
+      .map((n) => ({ id: n.id, dx: n.x - w.x, dy: n.y - w.y }));
+    if (offsets.length === 0) return;
+    this.drag = { kind: 'node', offsets, sx: p.x, sy: p.y, moved: false };
     svg.setPointerCapture(ev.pointerId);
   }
 
@@ -405,7 +447,13 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
       if (!d.moved && Math.hypot(p.x - d.sx, p.y - d.sy) < DRAG_THRESHOLD) return;
       d.moved = true;
       const w = toWorld(this.vp(), p.x, p.y);
-      this.nodeMove.emit({ id: d.id, x: round1(w.x + d.dx), y: round1(w.y + d.dy) });
+      this.nodeMove.emit(d.offsets.map((o) => ({ id: o.id, x: round1(w.x + o.dx), y: round1(w.y + o.dy) })));
+    } else if (d.kind === 'box') {
+      if (!d.moved && Math.hypot(p.x - d.sx, p.y - d.sy) < DRAG_THRESHOLD) return;
+      d.moved = true;
+      const b = { x: Math.min(d.sx, p.x), y: Math.min(d.sy, p.y), w: Math.abs(p.x - d.sx), h: Math.abs(p.y - d.sy) };
+      this.box.set(b);
+      this.selectionChange.emit(selectNodes([...d.base, ...this.nodesInBox(b)]));
     } else {
       this.rubber.set({ fromId: d.fromId, x: p.x, y: p.y });
       const port = this.hitInputPort(p, d.fromId);
@@ -435,6 +483,9 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
       }
     } else if (d.kind === 'node') {
       if (d.moved) this.nodeMoveEnd.emit();
+    } else if (d.kind === 'box') {
+      this.box.set(null);
+      // a Shift-click on empty space (no drag) keeps the selection as it is
     } else {
       const p = this.local(ev);
       const port = cancelled ? null : this.hitInputPort(p, d.fromId);

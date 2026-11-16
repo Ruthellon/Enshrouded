@@ -105,6 +105,13 @@
   stroke-dasharray: 4 3;
   pointer-events: none;
 }
+.select-box {
+  fill: rgba(255, 255, 255, 0.06);
+  stroke: #ffffff;
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  pointer-events: none;
+}
 .channel-ring {
   fill: rgba(78, 220, 230, 0.12);
   stroke: #4edce6;
