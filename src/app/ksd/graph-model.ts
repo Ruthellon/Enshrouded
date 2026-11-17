@@ -107,8 +107,14 @@ export function structuralIssue(g: SparkGraph, from: string, to: string, flag: n
   return null;
 }
 
+/**
+ * Optional extra rule for World Objects: returns the object's name when the World Object node `n`
+ * is linked to an in-game object that accepts no inputs (such as a Pressure Plate), else null.
+ */
+export type OutputOnlyCheck = (n: SparkNode) => string | null;
+
 /** The game's rules for what may connect to what. `g` must not already contain the edge itself. */
-export function ruleIssue(g: SparkGraph, from: string, to: string, flag: number): string | null {
+export function ruleIssue(g: SparkGraph, from: string, to: string, flag: number, outputOnly?: OutputOnlyCheck): string | null {
   const f = g.nodes.find((n) => n.id === from);
   const t = g.nodes.find((n) => n.id === to);
   if (!f || !t) return 'Both nodes must be in the same graph.';
@@ -118,6 +124,10 @@ export function ruleIssue(g: SparkGraph, from: string, to: string, flag: number)
 
   if (!fi.outputs) return `${fi.name} has no outputs.`;
   if (ti.inputs === 'none') return `${ti.name} accepts no inputs.`;
+  if (t.type === 0 && outputOnly) {
+    const obj = outputOnly(t);
+    if (obj) return `${obj} accepts no inputs (it only outputs a signal).`;
+  }
   if (slot > 1 || (slot === 1 && ti.inputs !== 'upperLower')) {
     return ti.inputs === 'upperLower' ? 'Invalid input connection.' : `${ti.name} has only one input connection.`;
   }
@@ -136,8 +146,15 @@ export function ruleIssue(g: SparkGraph, from: string, to: string, flag: number)
 }
 
 /** Why `from -> to` (in `flag`'s slot) cannot be added, or null if it can. */
-export function connectionIssue(g: SparkGraph, from: string, to: string, flag: number, enforceRules = true): string | null {
-  return structuralIssue(g, from, to, flag) ?? (enforceRules ? ruleIssue(g, from, to, flag) : null);
+export function connectionIssue(
+  g: SparkGraph,
+  from: string,
+  to: string,
+  flag: number,
+  enforceRules = true,
+  outputOnly?: OutputOnlyCheck,
+): string | null {
+  return structuralIssue(g, from, to, flag) ?? (enforceRules ? ruleIssue(g, from, to, flag, outputOnly) : null);
 }
 
 /** Which input connection a new link into `to` should use when the user has not chosen one. */
@@ -155,11 +172,11 @@ export interface RuleProblem {
 }
 
 /** Every rule the graph currently breaks (a clean graph returns an empty list). */
-export function validateGraph(g: SparkGraph): RuleProblem[] {
+export function validateGraph(g: SparkGraph, outputOnly?: OutputOnlyCheck): RuleProblem[] {
   const problems: RuleProblem[] = [];
   for (const e of g.edges) {
     const others: SparkGraph = { ...g, edges: g.edges.filter((x) => x !== e) };
-    const why = ruleIssue(others, e.from, e.to, e.flag);
+    const why = ruleIssue(others, e.from, e.to, e.flag, outputOnly);
     if (why) problems.push({ key: edgeKey(e), nodeId: null, message: why });
   }
   if (g.nodes.length > MAX_NODES_PER_GRAPH) {
@@ -179,13 +196,21 @@ export function validateGraph(g: SparkGraph): RuleProblem[] {
 
 // ------------------------------------------------------------------ editing links
 
-export function canAddEdge(g: SparkGraph, from: string, to: string, flag: number, enforceRules = true): boolean {
-  return connectionIssue(g, from, to, flag, enforceRules) === null;
+export function canAddEdge(g: SparkGraph, from: string, to: string, flag: number, enforceRules = true, outputOnly?: OutputOnlyCheck): boolean {
+  return connectionIssue(g, from, to, flag, enforceRules, outputOnly) === null;
 }
 
-export function addEdge(data: LogicData, gi: number, from: string, to: string, flag: number, enforceRules = true): Result<LogicData> {
+export function addEdge(
+  data: LogicData,
+  gi: number,
+  from: string,
+  to: string,
+  flag: number,
+  enforceRules = true,
+  outputOnly?: OutputOnlyCheck,
+): Result<LogicData> {
   const g = data.graphs[gi];
-  const why = connectionIssue(g, from, to, flag, enforceRules);
+  const why = connectionIssue(g, from, to, flag, enforceRules, outputOnly);
   if (why) return fail(why);
   return ok(replaceGraph(data, gi, { ...g, edges: [...g.edges, { from, to, flag }] }));
 }
@@ -199,12 +224,12 @@ export function removeEdge(data: LogicData, gi: number, key: string): LogicData 
   return replaceGraph(data, gi, { ...g, edges });
 }
 
-function replaceEdge(data: LogicData, gi: number, key: string, next: SparkEdge, enforceRules: boolean): Result<LogicData> {
+function replaceEdge(data: LogicData, gi: number, key: string, next: SparkEdge, enforceRules: boolean, outputOnly?: OutputOnlyCheck): Result<LogicData> {
   const g = data.graphs[gi];
   const i = g.edges.findIndex((e) => edgeKey(e) === key);
   if (i < 0) return fail('That link no longer exists.');
   const without: SparkGraph = { ...g, edges: g.edges.filter((_, j) => j !== i) };
-  const why = connectionIssue(without, next.from, next.to, next.flag, enforceRules);
+  const why = connectionIssue(without, next.from, next.to, next.flag, enforceRules, outputOnly);
   if (why) return fail(why);
   const edges = g.edges.slice();
   edges[i] = next;
@@ -212,19 +237,26 @@ function replaceEdge(data: LogicData, gi: number, key: string, next: SparkEdge, 
 }
 
 /** Swap source and target. The slot is kept when the new target has two inputs, otherwise reset to 0. */
-export function reverseEdge(data: LogicData, gi: number, key: string, enforceRules = true): Result<LogicData> {
+export function reverseEdge(data: LogicData, gi: number, key: string, enforceRules = true, outputOnly?: OutputOnlyCheck): Result<LogicData> {
   const g = data.graphs[gi];
   const e = g.edges.find((x) => edgeKey(x) === key);
   if (!e) return fail('That link no longer exists.');
   const newTarget = g.nodes.find((n) => n.id === e.from);
   const keepSlot = !!newTarget && typeInfo(newTarget.type).inputs === 'upperLower';
-  return replaceEdge(data, gi, key, { from: e.to, to: e.from, flag: withSlot(e.flag, keepSlot ? slotOf(e.flag) : 0) }, enforceRules);
+  return replaceEdge(data, gi, key, { from: e.to, to: e.from, flag: withSlot(e.flag, keepSlot ? slotOf(e.flag) : 0) }, enforceRules, outputOnly);
 }
 
-export function setEdgeSlot(data: LogicData, gi: number, key: string, slot: number, enforceRules = true): Result<LogicData> {
+export function setEdgeSlot(
+  data: LogicData,
+  gi: number,
+  key: string,
+  slot: number,
+  enforceRules = true,
+  outputOnly?: OutputOnlyCheck,
+): Result<LogicData> {
   const e = data.graphs[gi].edges.find((x) => edgeKey(x) === key);
   if (!e) return fail('That link no longer exists.');
-  return replaceEdge(data, gi, key, { ...e, flag: withSlot(e.flag, slot) }, enforceRules);
+  return replaceEdge(data, gi, key, { ...e, flag: withSlot(e.flag, slot) }, enforceRules, outputOnly);
 }
 
 // ------------------------------------------------------------------ editing node settings

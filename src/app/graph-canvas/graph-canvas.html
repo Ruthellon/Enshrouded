@@ -4,7 +4,8 @@
     class="canvas"
     [class.panning]="panning()"
     [class.connecting]="tool() === 'connect'"
-    [class.adding]="tool() === 'add'"
+    [class.adding]="tool() === 'add' && !testing()"
+    [class.testing]="testing()"
     (pointerdown)="onBackgroundDown($event)"
     (pointermove)="onPointerMove($event)"
     (pointerup)="onPointerUp($event)"
@@ -21,6 +22,9 @@
       <marker id="arrow-added" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
         <path d="M0 0L10 5L0 10z" fill="#5bc489" />
       </marker>
+      <marker id="arrow-live" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+        <path d="M0 0L10 5L0 10z" fill="#ffd84d" />
+      </marker>
       <marker id="arrow-selected" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto">
         <path d="M0 0L10 5L0 10z" fill="#ffffff" />
       </marker>
@@ -34,6 +38,8 @@
           [class.slot1]="e.slot !== 0"
           [class.added]="e.added"
           [class.selected]="e.selected"
+          [class.live]="e.live"
+          [class.dim]="e.dim"
           [attr.d]="e.d"
           [attr.marker-end]="e.marker"
         />
@@ -54,6 +60,17 @@
           <rect class="added-ring" [attr.x]="-n.ringW" [attr.y]="-n.ringH" [attr.width]="n.ringW * 2" [attr.height]="n.ringH * 2" rx="12" />
         } @else if (n.moved) {
           <rect class="moved-ring" [attr.x]="-n.ringW" [attr.y]="-n.ringH" [attr.width]="n.ringW * 2" [attr.height]="n.ringH * 2" rx="12" />
+        }
+        @if (n.liveOn) {
+          <rect class="live-ring" [class.flash]="n.liveChanged" [attr.x]="-n.ringW - 3" [attr.y]="-n.ringH - 3" [attr.width]="n.ringW * 2 + 6" [attr.height]="n.ringH * 2 + 6" rx="14" />
+        } @else if (n.liveChanged) {
+          <rect class="live-ring off flash" [attr.x]="-n.ringW - 3" [attr.y]="-n.ringH - 3" [attr.width]="n.ringW * 2 + 6" [attr.height]="n.ringH * 2 + 6" rx="14" />
+        }
+        @if (n.stored !== null) {
+          <g class="stored-badge" [class.on]="n.stored" [attr.transform]="'translate(0 ' + (-n.ringH - 16) + ')'">
+            <rect x="-34" y="-10" width="68" height="20" rx="10" />
+            <text x="0" y="4" text-anchor="middle">{{ n.stored ? 'stores ON' : 'stores OFF' }}</text>
+          </g>
         }
         @if (n.channelMate) {
           <rect class="channel-ring" [attr.x]="-n.ringW - 5" [attr.y]="-n.ringH - 5" [attr.width]="n.ringW * 2 + 10" [attr.height]="n.ringH * 2 + 10" rx="15" />
@@ -99,7 +116,9 @@
             [class.pending]="n.pending"
             [class.target]="n.target"
           />
-          @if (n.sub) {
+          @if (!showText()) {
+            <!-- too small to read: the tooltip still names the node -->
+          } @else if (n.sub) {
             <text class="node-title" x="0" y="-5" text-anchor="middle" dominant-baseline="central">{{ n.title }}</text>
             <text class="node-sub" x="0" y="12" text-anchor="middle" dominant-baseline="central">{{ n.sub }}</text>
           } @else {

@@ -48,7 +48,7 @@ export const NODE_TYPES: Readonly<Record<number, NodeTypeInfo>> = {
   6: T(6, 'NAND', 'NAND', 'logic', 'many', true, 'Transmits OFF if all incoming signals are ON, otherwise ON.'),
   7: T(7, 'XOR', 'XOR', 'logic', 'many', true, 'ON if exactly one incoming signal is ON; OFF if more than one is ON.'),
   8: T(8, 'D Flip-Flop', 'DFF', 'state', 'upperLower', true, 'LOWER ON: samples and stores the UPPER signal. LOWER OFF: holds its state and ignores UPPER.'),
-  9: T(9, 'Toggle', 'TGL', 'state', 'upperLower', true, 'Signals on UPPER toggle the node between ON and OFF. A signal on LOWER resets it to OFF.'),
+  9: T(9, 'Toggle', 'TGL', 'state', 'upperLower', true, 'UPPER going OFF to ON toggles the node between ON and OFF. LOWER going OFF to ON copies the current value of UPPER into it.'),
   10: T(10, 'Timed Trigger', 'TT', 'time', 'upperLower', true, 'When UPPER goes OFF to ON it stays OFF for the delay, then turns ON for the interval. An ON on LOWER resets it.'),
   11: T(11, 'Save Signal', 'S', 'state', 'single', false, 'Saves its input on a channel (1-32). Only one Save Signal per channel per graph. Has no outputs.'),
   12: T(12, 'Use Signal', 'U', 'state', 'none', true, 'Outputs the signal saved by the Save Signal of the same channel (1-32). Accepts no inputs.'),

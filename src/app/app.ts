@@ -1,5 +1,5 @@
-import { ChangeDetectionStrategy, Component, computed, signal } from '@angular/core';
-import { GraphCanvas, type ConnectRequest, type Tool } from './graph-canvas/graph-canvas';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, signal } from '@angular/core';
+import { GraphCanvas, type ConnectRequest, type LiveState, type Tool } from './graph-canvas/graph-canvas';
 import { NodeIcon } from './node-icon/node-icon';
 import {
   KsdError,
@@ -54,6 +54,13 @@ import {
   type InputKind,
 } from './ksd/sparkworks-types';
 
+import { indexWorldObjects, outputOnlyObject, worldObjectLabel } from './ksd/world-objects';
+import type { OutputOnlyCheck } from './ksd/graph-model';
+import { GraphSim, type ObjectMode } from './ksd/simulator';
+
+/** The Test speed that runs in real time (lower speeds are slowed down so each hop can be followed). */
+const REAL_TIME_SPEED = 10;
+
 interface EdgeRow {
   key: string;
   otherId: string;
@@ -97,6 +104,7 @@ export class App {
   protected readonly enforceRules = signal(true);
   protected readonly flipY = signal(false);
   protected readonly nodeScale = signal(1);
+  protected readonly scaleWithZoom = signal(true);
   protected readonly placeType = signal<number | null>(null);
   protected readonly fitTrigger = signal(0);
   protected readonly error = signal('');
@@ -150,13 +158,23 @@ export class App {
       };
     });
   });
+  /** Read-only lookup of World Object links in entity_chunk00 (rebuilt only when a file is loaded). */
+  protected readonly objectIndex = computed(() => {
+    const p = this.parsed();
+    return p ? indexWorldObjects(p) : null;
+  });
+  /** Rule check: World Objects linked to objects that accept no inputs (Pressure Plates). */
+  private readonly outputOnly = computed<OutputOnlyCheck>(() => {
+    const idx = this.objectIndex();
+    return (n) => outputOnlyObject(idx, n.extra);
+  });
   protected readonly nodeCount = computed(() => this.graph()?.nodes.length ?? 0);
   protected readonly atLimit = computed(() => this.nodeCount() >= MAX_NODES_PER_GRAPH);
   protected readonly nodeScalePct = computed(() => Math.round(this.nodeScale() * 100));
   /** Rule problems in the graph being viewed (empty when everything is valid). */
   protected readonly problems = computed(() => {
     const g = this.graph();
-    return g ? validateGraph(g) : [];
+    return g ? validateGraph(g, this.outputOnly()) : [];
   });
 
   protected readonly selectedNode = computed(() => {
@@ -169,12 +187,29 @@ export class App {
     const n = this.selectedNode();
     if (!n) return null;
     const info = typeInfo(n.type);
+    const idx = this.objectIndex();
+    const obj = n.type === 0 && n.extra && idx?.available ? idx.lookup(n.extra) : null;
     return {
+      object: obj
+        ? {
+            label: worldObjectLabel(n.extra, obj),
+            found: obj.found,
+            name: obj.name,
+            type: obj.typeName ?? (obj.typeId ? `unknown (${obj.typeId})` : null),
+            spawner: obj.spawner
+              ? {
+                  enemy: obj.spawner.enemyName ?? `unknown enemy (${obj.spawner.enemyId})`,
+                  level: obj.spawner.levelOffset > 0 ? `+${obj.spawner.levelOffset}` : String(obj.spawner.levelOffset),
+                  timeout: formatDuration(obj.spawner.timeoutMs),
+                }
+              : null,
+          }
+        : null,
       name: info.name,
       category: CATEGORY_NAMES[info.category],
       description: info.description,
       color: typeColor(n.type),
-      inputsText: INPUT_TEXT[info.inputs],
+      inputsText: outputOnlyObject(idx, n.extra) ? `Accepts no inputs (a ${obj?.typeName} only outputs).` : INPUT_TEXT[info.inputs],
       outputsText: info.outputs ? 'Can output to any number of nodes.' : 'Has no outputs.',
       hasChannel: hasChannel(n.type),
       channel: channelOf(n),
@@ -290,6 +325,7 @@ export class App {
       this.history = new History(parsed.logic);
       this.historyVersion.update((v) => v + 1);
       const firstWithNodes = parsed.logic.graphs.findIndex((g) => g.nodes.length > 0);
+      this.stopTest();
       this.graphIndex.set(Math.max(firstWithNodes, 0));
       this.selection.set(null);
       this.tool.set('move');
@@ -302,6 +338,7 @@ export class App {
   // ------------------------------------------------------------------ view controls
 
   protected selectGraph(i: number): void {
+    this.stopTest();
     this.graphIndex.set(i);
     this.selection.set(null);
     this.notice.set('');
@@ -322,6 +359,9 @@ export class App {
     this.placeType.set(type);
     this.tool.set('add');
     this.notice.set('');
+  }
+  protected onScaleWithZoom(ev: Event): void {
+    this.scaleWithZoom.set((ev.target as HTMLInputElement).checked);
   }
   protected onFlip(ev: Event): void {
     this.flipY.set((ev.target as HTMLInputElement).checked);
@@ -490,7 +530,7 @@ export class App {
     const twoInputs = !!target && typeInfo(target.type).inputs === 'upperLower';
     const slot = c.slot !== undefined ? c.slot : twoInputs ? autoSlot(g, c.to) : 0;
     const flag = slot << 8;
-    if (this.apply(addEdge(l, this.graphIndex(), c.from, c.to, flag, this.enforceRules()))) {
+    if (this.apply(addEdge(l, this.graphIndex(), c.from, c.to, flag, this.enforceRules(), this.outputOnly()))) {
       this.selection.set({ kind: 'edge', key: edgeKey({ from: c.from, to: c.to, flag }) });
     }
   }
@@ -525,12 +565,12 @@ export class App {
     }
   }
   protected reverseSelectedEdge(): void {
-    this.editSelectedEdge((l, gi, key, enforce) => reverseEdge(l, gi, key, enforce));
+    this.editSelectedEdge((l, gi, key, enforce) => reverseEdge(l, gi, key, enforce, this.outputOnly()));
   }
   protected setSelectedEdgeSlot(slot: number): void {
     const e = this.selectedEdge();
     if (!e || e.slot === slot) return;
-    this.editSelectedEdge((l, gi, key, enforce) => setEdgeSlot(l, gi, key, slot, enforce));
+    this.editSelectedEdge((l, gi, key, enforce) => setEdgeSlot(l, gi, key, slot, enforce, this.outputOnly()));
   }
 
   protected revertGraph(): void {
@@ -543,6 +583,227 @@ export class App {
     this.logic.set({ ...l, graphs: l.graphs.map((g, i) => (i === gi ? o.graphs[i] : g)) });
     this.commit();
     this.selection.set(null);
+  }
+
+  // ------------------------------------------------------------------ test mode
+
+  /**
+   * Speeds offered for playback. 1x = one tick (one link hop, 50 ms of game time) every 0.5 s;
+   * 10x = real time.
+   */
+  protected readonly speeds = [0.25, 0.5, 1, 2, 5, 10];
+  protected readonly testing = signal(false);
+  protected readonly playing = signal(false);
+  protected readonly speed = signal(1);
+  private sim: GraphSim | null = null;
+  /** Bumped whenever the simulation changes, so the views below recompute. */
+  private readonly simVersion = signal(0);
+  private timer: ReturnType<typeof setInterval> | null = null;
+
+  constructor() {
+    inject(DestroyRef).onDestroy(() => this.pause());
+  }
+
+  /**
+   * A tick's change is shown spreading link by link: these are the remaining in-between ON-sets
+   * (from GraphSim.waves), one shown per frame before time moves on.
+   */
+  private pendingWaves: ReadonlySet<string>[] = [];
+  /** The in-between state being shown, and the one before it (null = show the simulation's state). */
+  private readonly wave = signal<{ on: ReadonlySet<string>; changed: ReadonlySet<string> } | null>(null);
+
+  protected readonly live = computed<LiveState | null>(() => {
+    this.simVersion();
+    const s = this.sim;
+    if (!this.testing() || !s) return null;
+    return this.wave() ?? { on: s.onNodes(), changed: s.changed() };
+  });
+  protected readonly simTime = computed(() => {
+    this.simVersion();
+    return ((this.sim?.time ?? 0) / 1000).toFixed(2);
+  });
+  /** Newest events first, with readable node names. */
+  protected readonly simLog = computed(() => {
+    this.simVersion();
+    const s = this.sim;
+    if (!s) return [];
+    return s
+      .log()
+      .slice(-60)
+      .reverse()
+      .map((e, i) => ({
+        i,
+        t: (e.t / 1000).toFixed(2),
+        name: e.nodeId ? this.nodeLabel(e.nodeId) : '',
+        text: e.cause ?? (e.on ? 'ON' : 'OFF'),
+        on: e.on,
+        user: !!e.cause,
+        id: e.nodeId,
+      }));
+  });
+  /** Live details of the selected node while testing. */
+  protected readonly testNode = computed(() => {
+    this.simVersion();
+    const n = this.selectedNode();
+    const s = this.sim;
+    if (!n || !s || !this.testing()) return null;
+    const info = typeInfo(n.type);
+    const [upper, lower] = s.inputs(n.id);
+    const obj = n.type === 0;
+    const spawner = obj && s.isSpawner(n.id);
+    const respawn = spawner ? s.respawnIn(n.id) : null;
+    return {
+      spawner,
+      enemy: !spawner ? null : !s.isOn(n.id) && respawn === null ? 'none (spawner OFF)' : respawn === null ? 'alive' : `defeated, next in ${formatDuration(respawn)}`,
+      id: n.id,
+      name: this.nodeLabel(n.id),
+      on: s.isOn(n.id),
+      isObject: obj,
+      driven: s.hasInputs(n.id),
+      mode: obj ? s.objectMode(n.id) : 'auto',
+      twoInputs: info.inputs === 'upperLower',
+      hasInput: info.inputs !== 'none' && s.hasInputs(n.id),
+      upper,
+      lower,
+      memory: n.type === 8 || n.type === 9 ? s.memory(n.id) : null,
+    };
+  });
+
+  /** A readable name for a node: a World Object's in-game name, otherwise its type. */
+  private nodeLabel(id: string): string {
+    const n = this.graph()?.nodes.find((x) => x.id === id);
+    if (!n) return id;
+    if (n.type !== 0) return typeInfo(n.type).name;
+    const idx = this.objectIndex();
+    return idx?.available ? worldObjectLabel(n.extra, idx.lookup(n.extra)) : 'World Object';
+  }
+
+  protected toggleTest(): void {
+    if (this.testing()) this.stopTest();
+    else this.startTest();
+  }
+  private startTest(): void {
+    const g = this.graph();
+    if (!g) return;
+    // Spawners behave differently (see GraphSim): pass them on with their Spawn Timeout.
+    const spawners = new Map<string, number>();
+    const idx = this.objectIndex();
+    if (idx?.available) {
+      for (const n of g.nodes) {
+        const sp = n.type === 0 ? idx.lookup(n.extra).spawner : null;
+        if (sp) spawners.set(n.id, sp.timeoutMs);
+      }
+    }
+    this.sim = new GraphSim(g, { spawners });
+    this.testing.set(true);
+    this.notice.set('');
+    this.simVersion.update((v) => v + 1);
+    this.play();
+  }
+  protected stopTest(): void {
+    this.pause();
+    this.clearWaves();
+    this.sim = null;
+    this.testing.set(false);
+    this.simVersion.update((v) => v + 1);
+  }
+  protected play(): void {
+    if (!this.sim) return;
+    this.pause();
+    const s = this.sim;
+    this.timer = setInterval(() => this.advance(), (s.tickMs * REAL_TIME_SPEED) / this.speed());
+    this.playing.set(true);
+  }
+  protected pause(): void {
+    if (this.timer !== null) clearInterval(this.timer);
+    this.timer = null;
+    this.playing.set(false);
+  }
+  protected togglePlay(): void {
+    if (this.playing()) this.pause();
+    else this.play();
+  }
+  protected stepOnce(): void {
+    this.pause();
+    this.advance();
+  }
+  /** One frame: show the next link of a spreading change, or else advance the game by one tick. */
+  private advance(): void {
+    const s = this.sim;
+    if (!s) return;
+    if (this.pendingWaves.length === 0) {
+      s.step();
+      const waves = s.waves();
+      // with only one round there is nothing in between to show
+      this.pendingWaves = waves.length > 1 ? waves.slice() : [];
+      this.lastShown = this.live()?.on ?? new Set();
+    }
+    const next = this.pendingWaves.shift();
+    if (next && this.pendingWaves.length > 0) {
+      const prev = this.lastShown;
+      const changed = new Set([...next].filter((x) => !prev.has(x)).concat([...prev].filter((x) => !next.has(x))));
+      this.wave.set({ on: next, changed });
+      this.lastShown = next;
+    } else {
+      this.pendingWaves = [];
+      this.wave.set(null);
+    }
+    this.simVersion.update((v) => v + 1);
+  }
+  private lastShown: ReadonlySet<string> = new Set();
+  private clearWaves(): void {
+    this.pendingWaves = [];
+    this.wave.set(null);
+  }
+  protected resetTest(): void {
+    this.clearWaves();
+    this.sim?.reset();
+    this.simVersion.update((v) => v + 1);
+  }
+  protected onSpeed(ev: Event): void {
+    const v = Number((ev.target as HTMLSelectElement).value);
+    if (!Number.isFinite(v) || v <= 0) return;
+    this.speed.set(v);
+    if (this.playing()) this.play();
+  }
+
+  /**
+   * A node was clicked while testing. World Objects with nothing linked into them are things the
+   * player operates (switch buttons, pressure plates, trigger zones, ...): a click switches them ON,
+   * and the next click OFF. Switch Buttons latch like this in the game: the "Encounter 2 Passcode"
+   * graph ANDs eight of them, which only works if they stay ON. "Push" in the panel gives a short pulse.
+   */
+  protected onInteract(id: string): void {
+    const s = this.sim;
+    const n = this.graph()?.nodes.find((x) => x.id === id);
+    if (!s || !n || n.type !== 0) return;
+    if (s.isSpawner(id)) {
+      // clicking a Spawner = defeating the enemy it spawned
+      this.defeatEnemy(id);
+      return;
+    }
+    if (s.hasInputs(id)) return;
+    this.clearWaves();
+    s.setObject(id, s.objectMode(id) === 'on' ? 'off' : 'on');
+    this.simVersion.update((v) => v + 1);
+  }
+  protected defeatEnemy(id: string): void {
+    this.clearWaves();
+    this.sim?.defeat(id);
+    this.simVersion.update((v) => v + 1);
+  }
+  protected pushObject(id: string): void {
+    this.clearWaves();
+    this.sim?.push(id);
+    this.simVersion.update((v) => v + 1);
+  }
+  protected setObjectMode(id: string, mode: ObjectMode): void {
+    this.clearWaves();
+    this.sim?.setObject(id, mode);
+    this.simVersion.update((v) => v + 1);
+  }
+  protected selectNodeById(id: string): void {
+    if (id) this.onSelect({ kind: 'node', id });
   }
 
   // ------------------------------------------------------------------ history
@@ -584,6 +845,14 @@ export class App {
   protected onKeydown(ev: KeyboardEvent): void {
     const t = ev.target as HTMLElement | null;
     const typing = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT');
+    if (this.testing()) {
+      // while testing: Space plays/pauses, other edit shortcuts are off
+      if (ev.key === ' ' && !typing) {
+        ev.preventDefault();
+        this.togglePlay();
+      }
+      return;
+    }
     const mod = ev.ctrlKey || ev.metaKey;
     const key = ev.key.toLowerCase();
     if (mod && key === 'z') {
@@ -634,7 +903,7 @@ export class App {
       }
       this.download(bytes, this.exportName().trim() || this.fileName() || 'world.ksd');
       const s = this.summary();
-      const rules = l.graphs.reduce((n, g) => n + validateGraph(g).length, 0);
+      const rules = l.graphs.reduce((n, g) => n + validateGraph(g, this.outputOnly()).length, 0);
       const warn = rules > 0 ? ` Warning: ${rules} Sparkworks rule problem(s) remain in the file.` : '';
       this.notice.set(
         (s && s.total > 0

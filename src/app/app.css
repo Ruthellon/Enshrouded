@@ -170,7 +170,7 @@ button.wide {
 }
 .stage-title {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
   padding: 8px 14px;
   background: #131820;
@@ -268,7 +268,8 @@ button.wide {
   border-radius: 0 6px 6px 0;
   border-left: none;
 }
-.seg button.active {
+.seg button.active,
+.btn-row button.active {
   background: #24406f;
   border-color: #3f6fc4;
 }
@@ -464,4 +465,64 @@ input[type='range'] {
   background: #3a2c12;
   color: #ffd27a;
   border-bottom: 1px solid #6b5420;
+}
+
+/* ---- test mode */
+.test-chip {
+  font: 700 12px system-ui, sans-serif;
+  color: #1c2230;
+  background: #ffd84d;
+  border-radius: 10px;
+  padding: 2px 9px;
+  font-variant-numeric: tabular-nums;
+}
+.speed {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+.state {
+  margin-left: auto;
+  font: 700 12px system-ui, sans-serif;
+  padding: 1px 8px;
+  border-radius: 9px;
+  background: #2b3545;
+  color: #9aa3b2;
+}
+.state.on {
+  background: #ffd84d;
+  color: #1c2230;
+}
+.sim-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sim-log li {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+.sim-log li.user {
+  color: #7cc4ff;
+}
+.sim-log .t {
+  color: #8a93a3;
+  font-variant-numeric: tabular-nums;
+  min-width: 3.2em;
+  text-align: right;
+}
+.sim-log .what.on {
+  color: #ffd84d;
+  font-weight: 600;
+}
+.sim-log .none {
+  color: #8a93a3;
 }

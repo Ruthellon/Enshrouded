@@ -54,6 +54,51 @@
   stroke: #ffffff;
   stroke-width: 3;
 }
+.edge-line.live {
+  stroke: #ffd84d;
+  stroke-width: 3;
+}
+.edge-line.dim {
+  opacity: 0.35;
+}
+.live-ring {
+  fill: rgba(255, 216, 77, 0.22);
+  stroke: #ffd84d;
+  stroke-width: 3;
+  pointer-events: none;
+}
+.live-ring.off {
+  fill: none;
+  stroke: #ffd84d;
+  stroke-width: 1.5;
+  stroke-dasharray: 3 3;
+}
+.live-ring.flash {
+  stroke-width: 5;
+}
+.stored-badge {
+  pointer-events: none;
+}
+.stored-badge rect {
+  fill: #2a2f3a;
+  stroke: #8a909c;
+  stroke-width: 1.5;
+}
+.stored-badge text {
+  fill: #c9ced8;
+  font-size: 11px;
+  font-weight: 600;
+}
+.stored-badge.on rect {
+  fill: #ffd84d;
+  stroke: #ffd84d;
+}
+.stored-badge.on text {
+  fill: #1b1d22;
+}
+.canvas.testing .node {
+  cursor: pointer;
+}
 .rubber {
   stroke: #7cc4ff;
   stroke-width: 2;

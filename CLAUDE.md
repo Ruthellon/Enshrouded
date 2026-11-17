@@ -118,6 +118,35 @@ Low byte has only ever been 0; preserved.
 `customStrings.get(graphId.slice(10))` (hex chars 10..26 = last 8 bytes of the 13-byte id).
 Graph 0 = "Dungeon Door" in the original save (user-confirmed). 148 strings in the original.
 
+### 4.5a World Object refs → `entity_chunk00` (found 2026-11-16, read-only analysis)
+
+A World Object node's 4-byte extra is an **entity id** in the zstd-compressed `entity_chunk00` chunk. Around it:
+`[u32 object-type id][4-byte entity id][1 byte ?][8-byte custom_strings key = player-given name]`
+(name key at entity offset +5; ids searched byte-aligned and found only there). Checked on three of the user's
+worlds: world4 145 refs → 104 named, 20 found but unnamed, 21 not in the save at any bit offset (17 in
+"Encounter 1", 4 in "Dungeon Door"; cause unknown), 1 empty. world1/world2 behave the same.
+Type ids **user-confirmed** in-game: `a2455b47` = Switch Button, `766656b9` = Door, `71b5fbd5` = Pressure Plate
+(**output only, no inputs** — enforced via the optional `OutputOnlyCheck` argument of `ruleIssue`/`validateGraph`/
+`addEdge`/…, fed from `OUTPUT_ONLY_OBJECT_TYPES`), `ea26760e` = Torch, `a6dc827c` = Spawner.
+Spawner settings in game: Spawned Enemy (choice), Spawn Timeout (m:s:ms, wait after the enemy is killed), Level
+Offset (−5…+5 vs player level). **VERIFIED** against six spawners set in game (offsets from the entity id):
+`+13` 4-byte enemy id · `+17` i8 level offset · `+18` u64 ns spawn timeout. Enemy ids: `1d2a1178` Fell Defender I,
+`b862338b` Fell Soldier II, `5e56f58b` Fell Crusader, `71153792` Fell Commander, `a76ce83e` Fell Scout II, `050ffb09` Fell Marksman
+(`KNOWN_ENEMIES`; `3fd871ec` in world1 still unknown). The game
+displays 62.5 s as "1:2:5". Shown read-only in the Selection panel; editing would mean rewriting entity_chunk00. Type ids are consistent across worlds; their names are
+not in the save (presumably hashes of game asset names). Flame Altar names ("Dungeon Spawn 2") are also
+custom_strings referenced from `entity_chunk00`. **User-confirmed:** a World Object only resolves in-game when the
+player is at the Flame Altar that owns it; the field linking entity → altar is **UNKNOWN**.
+**VERIFIED (world2, 2026-11-16):** re-linking a World Object node in-game at a different altar ("Dungeon Start")
+rewrote that node's stored ref (`c8247d09` Door → `abfb5721`, type `d4c57f10`, a light); no other ref changed and
+the door's entity record stayed. So one stored ref = one object; the ref changes when the link changes.
+Type `d4c57f10` is very likely a light (all named examples are lights). The light was newly placed
+(user-confirmed), which is why its record was absent from the earlier copy. The 21 refs absent from world4 are
+still unexplained (deleted objects? objects stored elsewhere?).
+In the app (read-only) via `src/app/ksd/world-objects.ts` (`indexWorldObjects`, `KNOWN_OBJECT_TYPES`,
+`worldObjectLabel`), using the `fzstd` npm package to decompress `entity_chunk00`. That chunk is never written.
+Add newly confirmed type ids to `KNOWN_OBJECT_TYPES`. Test: `npx tsx tests/worldobjects.check.ts <world.ksd>...`.
+
 ### 4.6 `game_settings` (128-byte payload; decoded read-only)
 
 Packed, unpadded, 38 values in the order of the documented server `gameSettings` keys. f32 = factors,
@@ -167,8 +196,10 @@ Reset; single-input nodes take one link; upperLower nodes take one link on each 
 nodes unlimited; **one Save Signal per channel per graph**; a Use Signal may not link directly to a Save Signal
 of the same channel. All 588 edges in the original save pass these rules.
 **The 200-node-per-graph limit is always enforced** (not toggleable).
-Semantics (shown as tooltips): D Flip-Flop — LOWER ON samples and stores UPPER, LOWER OFF holds; Toggle —
-UPPER pulses toggle, LOWER resets to OFF; Timed Trigger — UPPER off→on waits `delay`, then ON for `interval`,
+Semantics (shown as tooltips): D Flip-Flop — LOWER ON samples and stores UPPER, LOWER OFF holds; Toggle (**VERIFIED in game**, 9-step
+switch test 2026-11-16) — UPPER OFF→ON flips it; LOWER OFF→ON *copies UPPER's current value* (so it is a reset only
+while UPPER is OFF); ON→OFF on either input does nothing; LOWER held ON does not block toggling. This is what keeps
+the Spawner loop in "Encounter 1 v2" (Toggle 87fa) running: a kill raises LOWER while UPPER is ON; Timed Trigger — UPPER off→on waits `delay`, then ON for `interval`,
 LOWER ON resets.
 
 ## 7. Architecture
@@ -180,6 +211,8 @@ src/app/ksd/sparkworks-types.ts  node table, colours, channels, durations, defau
 src/app/ksd/node-shapes.ts       node geometry, gate symbols, slot (port) positions
 src/app/ksd/graph-model.ts       immutable edit ops, rule checks, change summary, History<T>
 src/app/ksd/graph-geometry.ts    viewport/zoom/fit, hit boxes, bezier link path
+src/app/ksd/world-objects.ts     World Object ref → entity_chunk00 record (name, type id); read-only, uses fzstd
+src/app/ksd/simulator.ts         GraphSim: tick-based simulation of one graph for Test mode (section 7.3)
 src/app/graph-canvas/            SVG canvas component (pointer handling, hit-testing, drawing)
 src/app/node-icon/               small node picture for legend / palette
 src/app/app.{ts,html,css}        shell: upload, graph list, tools, palette, side panels, undo/redo, export
@@ -216,10 +249,56 @@ tools/                           Python tools (section 11)
    rectangles (`BOX_W=112`, `BOX_H=52`, `PORT_R=6.5`) with visible ports: inputs left, output right;
    upperLower inputs at `y = ∓BOX_H/4` (upper = slot 0, orange = LOWER). Node size slider 0.4–1.8 (default 1).
    Cues: yellow dashed ring = moved/changed, green dashed = added, white = selected.
+   **Zoom-dependent size** (View → "Shrink nodes when zoomed out", default on): drawn size =
+   `nodeScale × clamp(zoom × footprint, 0.12, 1)` (`drawScale` in graph-canvas.ts). `graphFootprint` = room per
+   node in node-sizes from nearest neighbours (5th percentile × 0.9), measured on each Fit (not on every edit, so
+   sizes don't jitter while dragging). Labels hide below draw scale 0.5; tooltips still name nodes. At Fit on a
+   1100×750 canvas this took "Encounter 1 v2" (199 nodes) from 1491 overlapping pairs to 0.
 6. **Defaults for new nodes match what the game writes** (section 4.4); World Object has no object ref and must
    be linked in-game; duplicating a World Object produces an unassigned one; a duplicated Save Signal gets the
    lowest free channel; a new Use Signal takes the lowest channel that has a Save.
 7. **Y axis**: the game's y-axis orientation was never confirmed, so the canvas has a "Flip Y" toggle.
+
+### 7.3 Test mode (simulator)
+
+"Test graph" (stage header) runs `GraphSim` on the open graph; editing is blocked meanwhile (canvas `testing`
+input, keyboard shortcuts off, undo/redo/revert disabled); Space = play/pause. Each tick (50 ms game time)
+signals first **settle** through the whole graph, then Hold/Clock/Toggle/DFF/Timed
+Trigger state is committed from the settled inputs. (An earlier version moved signals one link per tick; that broke
+the common pattern "zone → TT UPPER, zone → NOT → TT LOWER": the stale reset swallowed the start, so Timed
+Triggers never fired.) Settling evaluates nodes in **link (topological) order** with the newest values, repeating
+only for loops (`GraphSim.order`, `linkOrder`). An earlier round-by-round (Jacobi) settle produced glitches where
+paths of different length meet: in "Encounter 1 v2" AND 8819 (OR 849a & Use ch2 & NOT ch3) flashed ON for a round
+when Use ch2 came on while the pulse's OFF was still travelling through OR 849a, briefly feeding Save ch3.
+For display, `GraphSim.waves()` reveals the tick's final changes by link depth (a changed node one step after the
+latest changed node feeding it); the app plays them one per frame before advancing time.
+D Flip-Flop (**user-confirmed**): LOWER ON = transparent (passes and stores UPPER), LOWER OFF = hold last value.
+Its memory is tracked *within* settling (`GraphSim.work`): otherwise a latch whose own output turns its LOWER off
+(plate → DFF → Save ch1, Use ch1 → NOT → LOWER, as in "Encounter 1 v2") fell back to the pre-tick value and
+oscillated. Toggle likewise tracks its memory and last-seen inputs per settling round (`GraphSim.toggleWork`):
+comparing with the previous tick counted one UPPER change in every round, so the loop Toggle → Spawner → Save ch21 /
+Use ch21 → NOT → its own LOWER (world2 "Encounter 1 v2", Toggle 87fa) flipped back ON after its reset (that was under an earlier, wrong Toggle rule; see section 6). Playback speed: 1× = one tick per 0.5 s real time (default),
+10× = real time (`REAL_TIME_SPEED` in app.ts). Save Signals (no output) show a "stores ON/OFF" badge and the live ring from their input (computed in
+graph-canvas `nodes`). Clicking a World Object with no incoming links toggles it ON/OFF
+(Switch Buttons latch: inferred from "Encounter 2 Passcode", an AND of eight switches + NOTs, code `10111001`
+matches the in-game hint string); the panel also has Push (0.5 s pulse) / ON / OFF / Auto.
+**Spawners** (**user-confirmed** behaviour): while its input is ON a spawner keeps an enemy alive; input OFF despawns
+it. Output = spawner ON AND enemy alive; when the enemy dies the output is OFF until the next enemy spawns after the
+Spawn Timeout. In Test mode (`SimOptions.spawners`: node id → timeout ms, built from `indexWorldObjects` in
+`startTest`) clicking a spawner node (or "Defeat enemy") = defeating its enemy (`GraphSim.defeat`).
+**User-confirmed:** an unlinked spawner is OFF; off→on spawns a new enemy at once (no timeout); timeout 0 respawns
+immediately after a defeat. Simulator choices: the timeout runs from the tick the graph sees the defeat, and timeout 0
+still gives one OFF tick (50 ms, not visible in game; assumed to exist so the graph can react).
+**ASSUMPTIONS to confirm in game** (all marked in `simulator.ts`): World Object output = OR of its inputs (or the
+user's override); Clock with nothing linked runs freely, starts ON; AND/NAND with no inputs; Timed Trigger interval
+0 = one-tick pulse; Flank pulse = one tick; Hold = ON while input ON and for `delay` after it went ON; Use Signal
+sees its Save Signal's input **one tick later** (INFERRED: otherwise the life counter in "Encounter 1 v2" — six
+zero-length Timed Triggers → OR 849a → latches on ch2/ch3/ch4 — lost every life to one pulse; `GraphSim.stored`); channels are per graph; Global Reset clears memory/timers of this
+graph only (game: all graphs).
+Open question: in world2 "Encounter 1 v2", TT 62c8's UPPER is Use ch12, and Save ch12 = AND(TT 62c8, NOT ch13),
+so it can never start in the simulator. Either a graph bug, or channels/Use behave differently in game (e.g.
+shared across graphs).
+Tests: `npx tsx tests/simulator.check.ts` (self-contained).
 
 ### 7.2 Public API (signatures)
 
@@ -252,7 +331,7 @@ swap-removes is a guess at what the game does), **link edits**, **channel edits*
 **Risks / UNKNOWN:**
 - The ~1 KB **trailer** (runtime state) is not understood. If it refers to nodes by position/id, editing a graph
   that has saved state may desync it. All sample edits were in a graph with no saved state. Test carefully on a copy.
-- World Object refs (4 bytes) cannot be resolved to names (no match in the string table).
+- World Object refs: mostly resolvable to player-given names via `entity_chunk00` (section 4.5a); some are absent.
 - Graph names/ids/timestamps and existing nodes' types are not editable.
 - Preset identity of `game_settings` (Hard vs Custom) unknown.
 
@@ -263,6 +342,8 @@ Shipped (`tests/`, run with `tsx`, no Angular):
 - `core.check.ts <ksd>` — parse, checksums, byte-identical round-trip, edited rebuild, corruption rejection.
 - `model.check.ts <world0.ksd>` — 142 checks; hard-coded to the *original* save's graphs.
 - `gamefiles.check.ts base moved add delete` — 18 checks incl. randomized stress.
+- `simulator.check.ts` — 53 behaviour checks of the Test-mode simulator (self-contained).
+- `worldobjects.check.ts <ksd>...` — World Object lookup; checks EC2 Switch 1–8 when "Encounter 2 Passcode" exists.
   Needs game-written saves: base = original with an empty graph renamed "test" + one of every node;
   `moved` = two nodes moved; `add` = one AND added to "test"; `delete` = one AND deleted.
 

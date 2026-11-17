@@ -3,8 +3,8 @@
   @if (parsed()) {
     <span class="file-chip" title="Loaded file">{{ fileName() }} &middot; {{ fileInfo() }}</span>
     <span class="spacer"></span>
-    <button type="button" (click)="undo()" [disabled]="!canUndo()" title="Undo (Ctrl+Z)">Undo</button>
-    <button type="button" (click)="redo()" [disabled]="!canRedo()" title="Redo (Ctrl+Y)">Redo</button>
+    <button type="button" (click)="undo()" [disabled]="!canUndo() || testing()" title="Undo (Ctrl+Z)">Undo</button>
+    <button type="button" (click)="redo()" [disabled]="!canRedo() || testing()" title="Redo (Ctrl+Y)">Redo</button>
     <label class="btn" title="Open a different .ksd file">
       Open another&hellip;
       <input type="file" accept=".ksd" (change)="onFileInput($event)" hidden />
@@ -127,7 +127,10 @@
         <label class="field">
           <span>Node size: {{ nodeScalePct() }}%</span>
           <input type="range" min="0.4" max="1.8" step="0.1" [value]="nodeScale()" (input)="onNodeScale($event)" />
-          <span class="small-note">Large graphs: lower this or zoom in to untangle crowded nodes.</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" [checked]="scaleWithZoom()" (change)="onScaleWithZoom($event)" />
+          <span>Shrink nodes when zoomed out (labels hide when too small; hover for names)</span>
         </label>
         <label class="check">
           <input type="checkbox" [checked]="flipY()" (change)="onFlip($event)" />
@@ -168,7 +171,7 @@
             </ul>
           }
         }
-        <button type="button" class="wide" (click)="revertGraph()">Revert this graph</button>
+        <button type="button" class="wide" [disabled]="testing()" (click)="revertGraph()">Revert this graph</button>
         @if (notice()) {
           <p class="notice">{{ notice() }}</p>
         }
@@ -179,6 +182,26 @@
       <div class="stage-title">
         <strong>{{ graphTitle() }}</strong>
         <span class="muted">Graph {{ graphIndex() }}</span>
+        <span class="spacer"></span>
+        @if (testing()) {
+          <span class="test-chip">TESTING &middot; {{ simTime() }} s</span>
+          <button type="button" (click)="togglePlay()" [title]="playing() ? 'Pause (Space)' : 'Play (Space)'">
+            {{ playing() ? 'Pause' : 'Play' }}
+          </button>
+          <button type="button" (click)="stepOnce()" title="Advance one tick (one link hop)">Step</button>
+          <button type="button" (click)="resetTest()" title="Start over from time 0">Reset</button>
+          <label class="speed">
+            Speed
+            <select (change)="onSpeed($event)">
+              @for (sp of speeds; track sp) {
+                <option [value]="sp" [selected]="sp === speed()">{{ sp }}&times;{{ sp === 10 ? " (real time)" : "" }}</option>
+              }
+            </select>
+          </label>
+        }
+        <button type="button" [class.primary]="!testing()" (click)="toggleTest()">
+          {{ testing() ? 'Stop test' : 'Test graph' }}
+        </button>
       </div>
       <div class="stage-canvas">
         @if (graph(); as g) {
@@ -189,8 +212,13 @@
             [selection]="selection()"
             [flipY]="flipY()"
             [nodeScale]="nodeScale()"
+            [scaleWithZoom]="scaleWithZoom()"
             [placeType]="placeType()"
             [fitTrigger]="fitTrigger()"
+            [objectIndex]="objectIndex()"
+            [testing]="testing()"
+            [live]="live()"
+            (interact)="onInteract($event)"
             (selectionChange)="onSelect($event)"
             (nodeMove)="onNodeMove($event)"
             (nodeMoveEnd)="onNodeMoveEnd()"
@@ -202,6 +230,75 @@
     </section>
 
     <aside class="details">
+      @if (testing()) {
+      <h2>Test</h2>
+      <p class="help small">
+        Click a World Object that nothing links into (a switch button, pressure plate, trigger zone&hellip;) to switch
+        it ON, and again to switch it OFF. Select it to <em>Push</em> it instead (ON for 0.5 s). Glowing nodes and
+        yellow links are ON. Game time moves in 50 ms ticks; when something changes, the change is shown spreading one link per frame before time moves on.
+      </p>
+      @if (testNode(); as t) {
+        <div class="card">
+          <div class="row">
+            <strong>{{ t.name }}</strong>
+            <span class="state" [class.on]="t.on">{{ t.on ? 'ON' : 'OFF' }}</span>
+          </div>
+          @if (t.hasInput) {
+            @if (t.twoInputs) {
+              <div class="kv"><span>upper in</span><span class="val">{{ t.upper ? 'ON' : 'OFF' }}</span></div>
+              <div class="kv"><span>lower in</span><span class="val">{{ t.lower ? 'ON' : 'OFF' }}</span></div>
+            } @else {
+              <div class="kv"><span>input</span><span class="val">{{ t.upper ? 'ON' : 'OFF' }}</span></div>
+            }
+          }
+          @if (t.memory !== null) {
+            <div class="kv"><span>stored</span><span class="val">{{ t.memory ? 'ON' : 'OFF' }}</span></div>
+          }
+          @if (t.spawner) {
+            <div class="kv"><span>enemy</span><span class="val">{{ t.enemy }}</span></div>
+            <p class="desc">Spawner: ON while switched on and its enemy is alive. Click the node (or the button) to defeat the enemy; it stays OFF until the next one spawns after the Spawn Timeout. ON / OFF / Auto switch the spawner itself.</p>
+            <div class="btn-row">
+              <button type="button" [disabled]="!t.on" (click)="defeatEnemy(t.id)">Defeat enemy</button>
+              <button type="button" [class.active]="t.mode === 'on'" (click)="setObjectMode(t.id, 'on')">ON</button>
+              <button type="button" [class.active]="t.mode === 'off'" (click)="setObjectMode(t.id, 'off')">OFF</button>
+              <button type="button" [class.active]="t.mode === 'auto'" (click)="setObjectMode(t.id, 'auto')" title="Follow its links again">Auto</button>
+            </div>
+          } @else if (t.isObject) {
+            <p class="desc">
+              @if (t.driven) {
+                Driven by its links. You can still force it:
+              } @else {
+                Operate it:
+              }
+            </p>
+            <div class="btn-row">
+              <button type="button" (click)="pushObject(t.id)" title="ON for 0.5 s, like pressing a button">Push</button>
+              <button type="button" [class.active]="t.mode === 'on'" (click)="setObjectMode(t.id, 'on')">ON</button>
+              <button type="button" [class.active]="t.mode === 'off'" (click)="setObjectMode(t.id, 'off')">OFF</button>
+              <button type="button" [class.active]="t.mode === 'auto'" (click)="setObjectMode(t.id, 'auto')" title="Follow its links again">Auto</button>
+            </div>
+          }
+        </div>
+      } @else {
+        <p class="help">Select a node to see its live state.</p>
+      }
+      <h3>Events</h3>
+      <ol class="sim-log">
+        @for (e of simLog(); track e.i) {
+          <li [class.user]="e.user">
+            <span class="t">{{ e.t }}</span>
+            <button type="button" class="link" (click)="selectNodeById(e.id)">{{ e.name }}</button>
+            <span class="what" [class.on]="e.on && !e.user">{{ e.text }}</span>
+          </li>
+        } @empty {
+          <li class="none">Nothing has happened yet.</li>
+        }
+      </ol>
+      <p class="help small">
+        The simulation follows the game&rsquo;s node descriptions; some timing details are best guesses. Nothing is
+        saved or changed by testing.
+      </p>
+      } @else {
       <h2>Selection</h2>
 
       @if (nodeInfo(); as ni) {
@@ -224,6 +321,23 @@
                   <span class="val">none assigned yet</span>
                 }
               </div>
+              @if (ni.object; as o) {
+                @if (o.found) {
+                  <div class="kv"><span>name</span><span class="val">{{ o.name ?? 'none given in game' }}</span></div>
+                  <div class="kv"><span>type</span><span class="val">{{ o.type }}</span></div>
+                  @if (o.spawner; as sp) {
+                    <div class="kv"><span>enemy</span><span class="val">{{ sp.enemy }}</span></div>
+                    <div class="kv"><span>timeout</span><span class="val">{{ sp.timeout }}</span></div>
+                    <div class="kv"><span>level</span><span class="val">{{ sp.level }} vs player</span></div>
+                    <p class="help small">Spawner settings are read from the save; change them in the game.</p>
+                  }
+                } @else {
+                  <p class="help small">
+                    This object is not in this save. It may have been removed after it was linked; check the link in the
+                    game.
+                  </p>
+                }
+              }
             }
 
             @if (ni.hasChannel) {
@@ -335,14 +449,15 @@
         }
       }
 
+      }
       <h3>About this data</h3>
       <p class="help small">
         Node names, colours and connection rules come from the game. Each node shows its slots: inputs on the left, the
         output on the right. Two-input nodes have an upper and a lower input slot, and orange links go into the LOWER
         one (the file stores UPPER as input slot 0 and LOWER as slot 1). Dropping a link on a node body, not a slot,
         uses the first free input. Save and Use Signal channels
-        and the time values are decoded from each node&rsquo;s extra data. World Object names are not stored in a way
-        this editor can read. Logic gates are drawn as their usual symbols. Green dashed links and rings are new,
+        and the time values are decoded from each node&rsquo;s extra data. A World Object shows the name you gave
+        its object in the game (read from the save; only some object types are known by name). Logic gates are drawn as their usual symbols. Green dashed links and rings are new,
         and yellow dashed rings mark nodes you moved or changed.
       </p>
     </aside>

@@ -32,8 +32,55 @@ import {
 import { BOX_H, BOX_W, BUBBLE_RADIUS, GATE_SCALE, PORT_R, gateShape, nodeLayout } from '../ksd/node-shapes';
 import { formatDuration, nodeSubtitle, readDurations, channelOf, slotLabel, typeColor, typeInfo } from '../ksd/sparkworks-types';
 import { NodeIcon } from '../node-icon/node-icon';
+import { outputOnlyObject, worldObjectLabel, type WorldObjectIndex } from '../ksd/world-objects';
+
+/** Longest subtitle that fits inside a node box. */
+const SUB_MAX = 18;
+/**
+ * When zoomed out, nodes shrink with the zoom so they keep their share of space instead of piling up.
+ * A node's "footprint" is how many node-sizes of room it has in world units (from its nearest
+ * neighbour). Nodes are full size down to a zoom of 1 / footprint and shrink below that.
+ * The footprint is measured per graph whenever the view is fitted; this is the value before that
+ * (in the user's saves neighbouring nodes are at least ~2.5 node-sizes apart).
+ */
+const ZOOM_FOOTPRINT = 2.2;
+/** Ignore this share of the most crowded nodes (e.g. nodes placed on top of each other). */
+const FOOTPRINT_QUANTILE = 0.05;
+
+/** How many node-sizes of room the nodes of a graph have (see ZOOM_FOOTPRINT). */
+export function graphFootprint(nodes: readonly { x: number; y: number; type: number }[]): number {
+  if (nodes.length < 2) return Infinity;
+  const half = nodes.map((n) => nodeLayout(n.type));
+  const nearest: number[] = [];
+  for (let i = 0; i < nodes.length; i++) {
+    let best = Infinity;
+    for (let j = 0; j < nodes.length; j++) {
+      if (i === j) continue;
+      const r = Math.max(
+        Math.abs(nodes[i].x - nodes[j].x) / (half[i].halfW + half[j].halfW),
+        Math.abs(nodes[i].y - nodes[j].y) / (half[i].halfH + half[j].halfH),
+      );
+      if (r < best) best = r;
+    }
+    nearest.push(best);
+  }
+  nearest.sort((a, b) => a - b);
+  const r = nearest[Math.floor(FOOTPRINT_QUANTILE * (nearest.length - 1))];
+  // a little gap between neighbours; never below what keeps tiny overlaps from forcing tiny nodes
+  return Math.max(0.5, r * 0.9);
+}
+/** Smallest shrink factor (so nodes never vanish). */
+const MIN_SHRINK = 0.12;
+/** Below this drawn size, node labels are hidden (they would be unreadable). */
+const TEXT_MIN_SCALE = 0.5;
+const fitSub = (s: string): string => (s.length > SUB_MAX ? s.slice(0, SUB_MAX - 1) + '…' : s);
 
 export type Tool = 'move' | 'connect' | 'add';
+
+export interface LiveState {
+  on: ReadonlySet<string>;
+  changed: ReadonlySet<string>;
+}
 
 /** A request to link two nodes. `slot` is set when the link was dropped on a specific input slot. */
 export interface ConnectRequest {
@@ -83,6 +130,14 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
   readonly placeType = input<number | null>(null);
   /** Change this number to make the canvas re-fit the graph to the view. */
   readonly fitTrigger = input(0);
+  /** Shrink nodes when zoomed far out, so crowded graphs stay readable. */
+  readonly scaleWithZoom = input(true);
+  /** Resolves World Object refs to the in-game objects they are linked to (null = not available). */
+  readonly objectIndex = input<WorldObjectIndex | null>(null);
+  /** Test mode: no editing; clicking a World Object asks the parent to operate it (`interact`). */
+  readonly testing = input(false);
+  /** Live simulation state while testing: which nodes are ON, and which changed in the last tick. */
+  readonly live = input<LiveState | null>(null);
 
   readonly selectionChange = output<Selection>();
   /** Live positions while one or more nodes are dragged. */
@@ -91,6 +146,8 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
   readonly connect = output<ConnectRequest>();
   /** The Add tool was clicked on empty background at these world coordinates. */
   readonly place = output<{ x: number; y: number }>();
+  /** A node was clicked in test mode. */
+  readonly interact = output<string>();
 
   private readonly svgRef = viewChild.required<ElementRef<SVGSVGElement>>('svg');
   private readonly zone = inject(NgZone);
@@ -110,6 +167,15 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
   /** Selection box being drawn (screen coordinates). */
   protected readonly box = signal<{ x: number; y: number; w: number; h: number } | null>(null);
   private readonly selectedIds = computed(() => new Set(selectedNodeIds(this.selection())));
+  /** Size nodes are drawn at: the user's node size, shrunk when zoomed far out. */
+  protected readonly drawScale = computed(() => {
+    const s = this.nodeScale();
+    if (!this.scaleWithZoom()) return s;
+    return s * Math.max(MIN_SHRINK, Math.min(1, this.vp().scale * this.footprint()));
+  });
+  /** Room per node in this graph, measured when the view is fitted. */
+  private readonly footprint = signal(ZOOM_FOOTPRINT);
+  protected readonly showText = computed(() => this.drawScale() >= TEXT_MIN_SCALE);
   private readonly sizeKnown = computed(() => this.width() > 0 && this.height() > 0);
 
   protected readonly portRadius = PORT_R;
@@ -140,11 +206,19 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
     const pending = this.pendingFrom();
     const hoverNode = this.hoverTarget();
     const hoverPort = this.hoverPort();
-    const s = this.nodeScale();
+    const s = this.drawScale();
     // Channel of the selected Save/Use Signal (single selection only), so every node on the same
     // channel can be highlighted.
     const selNode = sel !== null && sel.kind === 'node' ? this.graph().nodes.find((m) => m.id === sel.id) : undefined;
     const selChannel = selNode ? channelOf(selNode) : null;
+    const objects = this.objectIndex();
+    const live = this.testing() ? this.live() : null;
+    // While testing, a Save Signal (which has no output) shows the value it stores: its input.
+    const savedOn = new Set<string>();
+    if (live) {
+      const saves = new Set(this.graph().nodes.filter((m) => m.type === 11).map((m) => m.id));
+      for (const e of this.graph().edges) if (saves.has(e.to) && live.on.has(e.from)) savedOn.add(e.to);
+    }
     return this.graph().nodes.map((n) => {
       const p = toScreen(v, n.x, n.y);
       const o = orig.get(n.id);
@@ -154,8 +228,23 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
       const times = readDurations(n)
         .map((d) => `${d.label} ${formatDuration(d.ms)}`)
         .join(', ');
-      const details = [channel !== null ? `channel ${channel}` : '', times].filter(Boolean).join(' | ');
-      const inputs = layout.inputs.map((pt) => ({
+      // World Objects: what the node is linked to in the game, when the save says so
+      let objectText = '';
+      let sub = nodeSubtitle(n);
+      if (n.type === 0 && objects?.available) {
+        const o = n.extra ? objects.lookup(n.extra) : null;
+        objectText = worldObjectLabel(n.extra, o);
+        if (o?.found && o.name) objectText += o.typeName ? ` (${o.typeName})` : ` (type ${o.typeId})`;
+        if (o?.spawner) {
+          const lv = o.spawner.levelOffset;
+          objectText += ` | spawns ${o.spawner.enemyName ?? 'enemy ' + o.spawner.enemyId}, level ${lv > 0 ? '+' + lv : lv}, timeout ${formatDuration(o.spawner.timeoutMs)}`;
+        }
+        sub = fitSub(worldObjectLabel(n.extra, o));
+      }
+      const details = [channel !== null ? `channel ${channel}` : '', times, objectText].filter(Boolean).join(' | ');
+      // an object that only outputs (Pressure Plate) gets no input slot
+      const noInput = n.type === 0 && outputOnlyObject(objects, n.extra) !== null;
+      const inputs = (noInput ? [] : layout.inputs).map((pt) => ({
         slot: pt.slot,
         x: pt.x,
         y: pt.y,
@@ -183,7 +272,7 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
         gate: gateShape(n.type),
         isGate: layout.kind === 'gate',
         title: info.name,
-        sub: nodeSubtitle(n),
+        sub,
         halfW: layout.halfW,
         halfH: layout.halfH,
         ringW: layout.halfW + 7,
@@ -196,6 +285,10 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
           (Math.fround(o.x) !== Math.fround(n.x) || Math.fround(o.y) !== Math.fround(n.y) || o.extra !== n.extra),
         selected: selIds.has(n.id),
         channelMate: selChannel !== null && channel === selChannel && n.id !== selNode?.id,
+        liveOn: !!live?.on.has(n.id) || savedOn.has(n.id),
+        /** Save Signal while testing: whether it stores ON (null otherwise). */
+        stored: live && n.type === 11 ? savedOn.has(n.id) : null,
+        liveChanged: !!live?.changed.has(n.id),
         pending: pending === n.id,
         target: hoverNode === n.id,
         tip: `${info.name}${details ? ' (' + details + ')' : ''}  |  id ${n.id}`,
@@ -207,8 +300,9 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
     const g = this.graph();
     const sel = this.selection();
     const origKeys = this.originalKeys();
-    const s = this.nodeScale();
+    const s = this.drawScale();
     const views = new Map(this.nodes().map((n) => [n.id, n]));
+    const testing = this.testing();
     return g.edges.map((e) => {
       const a = views.get(e.from);
       const b = views.get(e.to);
@@ -224,8 +318,10 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
         const into = b.inputs.find((p) => p.slot === slot) ?? b.inputs[0] ?? { sx: b.x - b.halfW * s, sy: b.y };
         d = linkPath(from.sx, from.sy, into.sx, into.sy).d;
       }
-      const kind = selected ? 'selected' : added ? 'added' : slot !== 0 ? 'slot1' : 'normal';
-      return { key, d, slot, selected, added, marker: `url(#arrow-${kind})` };
+      // while testing, a link carries the ON/OFF output of its source node
+      const live = testing ? !!a?.liveOn : false;
+      const kind = selected ? 'selected' : live ? 'live' : added ? 'added' : slot !== 0 ? 'slot1' : 'normal';
+      return { key, d, slot, selected, added, live, dim: testing && !live && !selected, marker: `url(#arrow-${kind})` };
     });
   });
 
@@ -290,6 +386,7 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
   // ------------------------------------------------------------------ public API
 
   fit(): void {
+    this.footprint.set(graphFootprint(this.graph().nodes));
     const pad = Math.max(60, (BOX_W / 2) * this.nodeScale() + 24);
     this.vp.set(fitViewport(this.graph().nodes, this.width(), this.height(), this.flipY(), pad));
   }
@@ -319,7 +416,7 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
       if (n.id === exclude) continue;
       for (const pt of n.inputs) pts.push({ id: `${n.id}:${pt.slot}`, x: pt.sx, y: pt.sy });
     }
-    const hit = nodeAt(pts, p.x, p.y, PORT_R * this.nodeScale() + PORT_SLOP);
+    const hit = nodeAt(pts, p.x, p.y, PORT_R * this.drawScale() + PORT_SLOP);
     if (hit === null) return null;
     const i = hit.lastIndexOf(':');
     return { id: hit.slice(0, i), slot: Number(hit.slice(i + 1)) };
@@ -327,7 +424,7 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
 
   /** The node body under a point, if any. */
   private hitNode(p: Pt, exclude: string | null): string | null {
-    const s = this.nodeScale();
+    const s = this.drawScale();
     const boxes: HitBox[] = this.nodes()
       .filter((n) => n.id !== exclude)
       .map((n) => ({ id: n.id, x: n.x, y: n.y, halfW: n.halfW * s, halfH: n.halfH * s }));
@@ -337,7 +434,7 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
   protected onBackgroundDown(ev: PointerEvent): void {
     if (ev.button !== 0) return;
     const p = this.local(ev);
-    if (ev.shiftKey && this.tool() !== 'connect') {
+    if (ev.shiftKey && (this.tool() !== 'connect' || this.testing())) {
       // Shift-drag: draw a box; nodes inside it are added to the current node selection.
       this.drag = { kind: 'box', sx: p.x, sy: p.y, base: selectedNodeIds(this.selection()), moved: false };
     } else {
@@ -350,7 +447,7 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
 
   /** Ids of the nodes that overlap a screen-space rectangle. */
   private nodesInBox(b: { x: number; y: number; w: number; h: number }): string[] {
-    const s = this.nodeScale();
+    const s = this.drawScale();
     return this.nodes()
       .filter((n) => {
         const hw = n.halfW * s;
@@ -374,6 +471,17 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
     ev.stopPropagation();
     const svg = this.svgRef().nativeElement;
     const p = this.local(ev);
+
+    if (this.testing()) {
+      // no editing while testing: a click selects the node and lets the parent operate it
+      if (additive(ev)) {
+        this.selectionChange.emit(toggleNodeSelection(this.selection(), id));
+        return;
+      }
+      this.selectionChange.emit({ kind: 'node', id });
+      this.interact.emit(id);
+      return;
+    }
 
     if (this.tool() !== 'connect' && additive(ev)) {
       // Shift/Ctrl-click adds the node to the selection, or takes it out.
@@ -411,6 +519,10 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
   /** Pressing an output slot always starts a link, whatever the tool. */
   protected onOutputDown(ev: PointerEvent, id: string): void {
     if (ev.button !== 0) return;
+    if (this.testing()) {
+      this.onNodeDown(ev, id);
+      return;
+    }
     ev.stopPropagation();
     this.selectionChange.emit({ kind: 'node', id });
     this.startLink(ev, id);
@@ -419,6 +531,10 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
   /** Pressing an input slot completes a click-click link; otherwise it just selects the node. */
   protected onInputDown(ev: PointerEvent, id: string, slot: number): void {
     if (ev.button !== 0) return;
+    if (this.testing()) {
+      this.onNodeDown(ev, id);
+      return;
+    }
     ev.stopPropagation();
     const pending = this.pendingFrom();
     if (pending !== null && pending !== id) {
@@ -473,7 +589,7 @@ export class GraphCanvas implements AfterViewInit, OnDestroy {
 
     if (d.kind === 'pan') {
       if (!d.moved && !cancelled) {
-        if (this.tool() === 'add' && this.placeType() !== null) {
+        if (this.tool() === 'add' && this.placeType() !== null && !this.testing()) {
           const w = toWorld(this.vp(), d.sx, d.sy);
           this.place.emit({ x: round1(w.x), y: round1(w.y) });
         } else {
